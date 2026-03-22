@@ -175,9 +175,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <div class="controls">
     <label for="ttlSelect">&#9200; Expira em:</label>
     <select id="ttlSelect">
+      <option value="0" selected>Nunca expira</option>
       <option value="3600">1 hora</option>
       <option value="21600">6 horas</option>
-      <option value="86400" selected>24 horas</option>
+      <option value="86400">24 horas</option>
       <option value="259200">3 dias</option>
       <option value="604800">7 dias</option>
     </select>
@@ -705,6 +706,19 @@ async def download_file(file_id: str, filename: str):
         media_type=content_type,
         headers=headers
     )
+
+
+@app.post("/admin/set-all-infinite")
+async def set_all_infinite():
+    """Set TTL=0 (never expires) for all existing files"""
+    updated = 0
+    for metadata_file in DATA_DIR.glob("*.meta.json"):
+        metadata = FileMetadata.from_file(metadata_file)
+        if metadata and metadata.ttl != 0:
+            metadata.ttl = 0
+            metadata.save(metadata_file)
+            updated += 1
+    return {"updated": updated}
 
 
 @app.get("/", response_class=HTMLResponse)
