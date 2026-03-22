@@ -559,7 +559,18 @@ async def cleanup_task():
 # ---------------------------------------------------------------------------
 @app.on_event("startup")
 async def startup_event():
-    """Start background cleanup task"""
+    """Start background cleanup task and migrate existing files to infinite TTL"""
+    # One-time migration: set all existing files to never expire
+    migrated = 0
+    for metadata_file in DATA_DIR.glob("*.meta.json"):
+        metadata = FileMetadata.from_file(metadata_file)
+        if metadata and metadata.ttl != 0:
+            metadata.ttl = 0
+            metadata.save(metadata_file)
+            migrated += 1
+    if migrated > 0:
+        print(f"Migrated {migrated} file(s) to infinite TTL")
+
     asyncio.create_task(cleanup_task())
     print(f"TmpUp started - data directory: {DATA_DIR}")
     print(f"Auto-cleanup every {CLEANUP_INTERVAL} seconds")
