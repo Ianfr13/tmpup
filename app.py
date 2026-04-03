@@ -10,15 +10,56 @@ import time
 import uuid
 from pathlib import Path
 from typing import Optional
-from urllib.parse import unquote
+from urllib.parse import unquote, urlencode
 
+import httpx
 from fastapi import FastAPI, Request, Response, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
+from starlette.middleware.base import BaseHTTPMiddleware
 import uvicorn
 
 BASE_URL = os.environ.get("BASE_URL", "https://tmpup.douravita.com.br")
 
+# ---------------------------------------------------------------------------
+# Auth config
+# ---------------------------------------------------------------------------
+SECRET_KEY = os.environ.get("SECRET_KEY", "")
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+ALLOWED_DOMAIN = "douravita.com.br"
+SESSION_MAX_AGE = 86400 * 7  # 7 days
+
+_serializer = URLSafeTimedSerializer(SECRET_KEY)
+
+PUBLIC_PATHS = {"/health", "/auth/login", "/auth/google", "/auth/callback", "/auth/logout"}
+
+
+def create_session(email: str) -> str:
+    return _serializer.dumps(email)
+
+
+def verify_session(token: str) -> Optional[str]:
+    try:
+        return _serializer.loads(token, max_age=SESSION_MAX_AGE)
+    except (SignatureExpired, BadSignature):
+        return None
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if path in PUBLIC_PATHS or path.startswith("/d/"):
+            return await call_next(request)
+
+        email = verify_session(request.cookies.get("session", ""))
+        if not email:
+            return RedirectResponse("/auth/login", status_code=302)
+        return await call_next(request)
+
+
 app = FastAPI(title="TmpUp", description="Temporary File Upload Service")
+app.add_middleware(AuthMiddleware)
 
 DATA_DIR = Path("/data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -157,6 +198,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
 
+<div style="position:absolute;top:16px;right:16px;display:flex;align-items:center;gap:10px">
+  <span id="userEmail" style="color:#525252;font-size:.8rem"></span>
+  <a href="/auth/logout" style="color:#737373;font-size:.8rem;text-decoration:none;
+    border:1px solid #333;border-radius:6px;padding:4px 10px;transition:all .15s"
+    onmouseover="this.style.color='#e5e5e5'" onmouseout="this.style.color='#737373'">Sair</a>
+</div>
 <h1>TmpUp</h1>
 <p class="subtitle">Upload temporario de arquivos</p>
 
@@ -167,7 +214,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <span class="dropzone-icon">&#128193;</span>
     <div class="dropzone-text">
       <strong>Arraste arquivos aqui</strong><br>
-      ou clique para selecionar
+      ou clique para selecionar<br>
+      <span style="font-size:.8rem;color:#525252">sem limite de tamanho</span>
     </div>
   </div>
 
@@ -444,6 +492,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   // --- Countdown refresh ---
   setInterval(loadFiles, 30000); // refresh every 30s
 
+  // --- Load user email ---
+  fetch('/api/me').then(r=>r.json()).then(d=>{
+    if(d.email) document.getElementById('userEmail').textContent = d.email;
+  });
+
   // --- Init ---
   loadFiles();
 })();
@@ -574,6 +627,120 @@ async def startup_event():
     asyncio.create_task(cleanup_task())
     print(f"TmpUp started - data directory: {DATA_DIR}")
     print(f"Auto-cleanup every {CLEANUP_INTERVAL} seconds")
+
+
+# ---------------------------------------------------------------------------
+# Auth routes
+# ---------------------------------------------------------------------------
+LOGIN_HTML = """<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TmpUp - Login</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e5e5e5;
+    min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+  .card{background:#1a1a1a;border:1px solid #262626;border-radius:16px;
+    padding:40px 32px;text-align:center;max-width:360px;width:100%}
+  h1{font-size:1.6rem;font-weight:700;color:#fff;margin-bottom:6px}
+  .subtitle{color:#737373;font-size:.9rem;margin-bottom:32px}
+  .btn-google{display:flex;align-items:center;justify-content:center;gap:10px;
+    background:#fff;color:#1f1f1f;border:none;border-radius:8px;padding:12px 24px;
+    font-size:.95rem;font-weight:500;cursor:pointer;text-decoration:none;
+    transition:background .15s;width:100%}
+  .btn-google:hover{background:#f1f1f1}
+  .note{margin-top:20px;color:#525252;font-size:.8rem}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>TmpUp</h1>
+  <p class="subtitle">Upload temporario de arquivos</p>
+  <a href="/auth/google" class="btn-google">
+    <svg width="18" height="18" viewBox="0 0 18 18">
+      <path fill="#4285F4" d="M16.51 8H8.98v3h4.3c-.18 1-.74 1.48-1.6 2.04v2.01h2.6a7.8 7.8 0 0 0 2.38-5.88c0-.57-.05-.66-.15-1.18z"/>
+      <path fill="#34A353" d="M8.98 17c2.16 0 3.97-.72 5.3-1.94l-2.6-2a4.8 4.8 0 0 1-7.18-2.54H1.83v2.07A8 8 0 0 0 8.98 17z"/>
+      <path fill="#FBBC05" d="M4.5 10.52a4.8 4.8 0 0 1 0-3.04V5.41H1.83a8 8 0 0 0 0 7.18l2.67-2.07z"/>
+      <path fill="#EA4335" d="M8.98 4.18c1.17 0 2.23.4 3.06 1.2l2.3-2.3A8 8 0 0 0 1.83 5.4L4.5 7.49a4.77 4.77 0 0 1 4.48-3.31z"/>
+    </svg>
+    Entrar com Google
+  </a>
+  <p class="note">Acesso restrito a @douravita.com.br</p>
+</div>
+</body>
+</html>"""
+
+
+@app.get("/auth/login", response_class=HTMLResponse)
+async def auth_login():
+    return HTMLResponse(content=LOGIN_HTML)
+
+
+@app.get("/auth/google")
+async def auth_google():
+    params = urlencode({
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": f"{BASE_URL}/auth/callback",
+        "response_type": "code",
+        "scope": "openid email",
+        "prompt": "select_account",
+    })
+    return RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{params}", status_code=302)
+
+
+@app.get("/auth/callback")
+async def auth_callback(request: Request, code: str = ""):
+    if not code:
+        raise HTTPException(status_code=400, detail="Codigo OAuth ausente")
+
+    async with httpx.AsyncClient() as client:
+        token_resp = await client.post("https://oauth2.googleapis.com/token", data={
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": f"{BASE_URL}/auth/callback",
+            "grant_type": "authorization_code",
+        })
+        token_data = token_resp.json()
+
+        if "access_token" not in token_data:
+            raise HTTPException(status_code=401, detail="Falha na autenticacao Google")
+
+        userinfo_resp = await client.get(
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            headers={"Authorization": f"Bearer {token_data['access_token']}"},
+        )
+        userinfo = userinfo_resp.json()
+
+    email = userinfo.get("email", "")
+    if not email.endswith(f"@{ALLOWED_DOMAIN}"):
+        raise HTTPException(status_code=403, detail=f"Acesso restrito a @{ALLOWED_DOMAIN}")
+
+    response = RedirectResponse("/", status_code=302)
+    response.set_cookie(
+        "session",
+        create_session(email),
+        max_age=SESSION_MAX_AGE,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+    )
+    return response
+
+
+@app.get("/auth/logout")
+async def auth_logout():
+    response = RedirectResponse("/auth/login", status_code=302)
+    response.delete_cookie("session")
+    return response
+
+
+@app.get("/api/me")
+async def get_me(request: Request):
+    email = verify_session(request.cookies.get("session", ""))
+    return {"email": email}
 
 
 # ---------------------------------------------------------------------------
