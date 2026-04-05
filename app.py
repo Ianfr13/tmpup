@@ -49,7 +49,7 @@ def verify_session(token: str) -> Optional[str]:
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if path in PUBLIC_PATHS or path.startswith("/d/"):
+        if path in PUBLIC_PATHS or path.startswith("/d/") or path.startswith("/v/"):
             return await call_next(request)
 
         email = verify_session(request.cookies.get("session", ""))
@@ -171,6 +171,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
   .btn-icon:hover{background:#333;border-color:#444}
   .btn-icon.copied{background:#166534;border-color:#22c55e;color:#22c55e}
+
+  /* Image thumbnail */
+  .file-thumb{
+    width:52px;height:52px;object-fit:cover;border-radius:8px;
+    flex-shrink:0;border:1px solid #333;background:#262626;
+  }
 
   /* Empty state */
   .empty-state{
@@ -400,14 +406,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       return;
     }
     fileList.innerHTML = files.map(f => {
-      const ext = f.filename.split('.').pop().toUpperCase();
       const icon = getFileIcon(f.filename);
       const remaining = formatCountdown(f.expires_in);
       const created = new Date(f.created_at * 1000).toLocaleString('pt-BR', {
         day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'
       });
+      const thumbOrIcon = f.is_image
+        ? `<img class="file-thumb" src="${esc(f.url)}" alt="${esc(f.filename)}" loading="lazy">`
+        : `<span class="file-icon">${icon}</span>`;
+      const openBtn = f.is_image
+        ? `<a class="btn-icon" href="${esc(f.view_url)}" target="_blank" title="Visualizar">&#128065; Ver</a>`
+        : `<a class="btn-icon" href="${esc(f.url)}" target="_blank" title="Abrir">&#128279;</a>`;
       return `<div class="file-card">
-        <span class="file-icon">${icon}</span>
+        ${thumbOrIcon}
         <div class="file-info">
           <div class="file-name" title="${esc(f.filename)}">${esc(f.filename)}</div>
           <div class="file-meta">
@@ -417,7 +428,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
         <div class="file-actions">
           <button class="btn-icon" onclick="copyLink('${esc(f.url)}', this)" title="Copiar link">&#128203; Copiar</button>
-          <a class="btn-icon" href="${esc(f.url)}" target="_blank" title="Abrir">&#128279;</a>
+          ${openBtn}
         </div>
       </div>`;
     }).join('');
@@ -763,6 +774,8 @@ async def list_files():
                 "id": metadata.file_id,
                 "filename": metadata.filename,
                 "url": f"{BASE_URL}/d/{metadata.file_id}/{metadata.filename}",
+                "view_url": f"{BASE_URL}/v/{metadata.file_id}/{metadata.filename}",
+                "is_image": is_image_file(metadata.filename),
                 "expires_in": metadata.expires_in,
                 "created_at": metadata.created_at
             })
@@ -888,6 +901,112 @@ async def download_file(file_id: str, filename: str):
         media_type=content_type,
         headers=headers
     )
+
+
+VIEWER_TEMPLATE = """<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{filename} — TmpUp</title>
+<style>
+  *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+  body{{
+    font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    background:#0f0f0f;color:#e5e5e5;min-height:100vh;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:24px 16px;gap:20px;
+  }}
+  .viewer-img{{
+    max-width:100%;max-height:80vh;border-radius:12px;
+    box-shadow:0 8px 32px rgba(0,0,0,.6);display:block;
+  }}
+  .viewer-meta{{
+    text-align:center;display:flex;flex-direction:column;align-items:center;gap:8px;
+  }}
+  .viewer-filename{{
+    font-size:1rem;font-weight:600;color:#e5e5e5;word-break:break-all;max-width:640px;
+  }}
+  .viewer-expiry{{font-size:.8rem;color:#737373}}
+  .viewer-actions{{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}}
+  .btn{{
+    background:#262626;border:1px solid #333;border-radius:8px;
+    padding:10px 18px;cursor:pointer;font-size:.85rem;color:#e5e5e5;
+    text-decoration:none;display:inline-flex;align-items:center;gap:6px;
+    transition:all .15s;
+  }}
+  .btn:hover{{background:#333;border-color:#444}}
+  .btn-primary{{background:#3b82f6;border-color:#3b82f6;color:#fff}}
+  .btn-primary:hover{{background:#2563eb;border-color:#2563eb}}
+</style>
+</head>
+<body>
+<img class="viewer-img" src="{image_url}" alt="{filename}">
+<div class="viewer-meta">
+  <div class="viewer-filename">{filename}</div>
+  <div class="viewer-expiry">{expiry_text}</div>
+</div>
+<div class="viewer-actions">
+  <a class="btn btn-primary" href="{download_url}" download="{filename}">&#11015; Download</a>
+  <button class="btn" onclick="navigator.clipboard.writeText('{share_url}').then(()=>this.textContent='&#10003; Copiado!')">&#128203; Copiar link</button>
+</div>
+</body>
+</html>"""
+
+
+IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "tiff", "avif"}
+
+
+def is_image_file(filename: str) -> bool:
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return ext in IMAGE_EXTENSIONS
+
+
+def format_expiry(expires_in: int) -> str:
+    if expires_in <= 0:
+        return "Nunca expira"
+    if expires_in < 3600:
+        return f"Expira em {expires_in // 60}min"
+    if expires_in < 86400:
+        h = expires_in // 3600
+        m = (expires_in % 3600) // 60
+        return f"Expira em {h}h {m}min"
+    return f"Expira em {expires_in // 86400} dia(s)"
+
+
+@app.get("/v/{file_id}/{filename}", response_class=HTMLResponse)
+async def view_file(file_id: str, filename: str):
+    """Viewer page for images"""
+    file_path, metadata_path = get_file_paths(file_id)
+
+    metadata = FileMetadata.from_file(metadata_path)
+    if not metadata:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if metadata.is_expired:
+        if file_path.exists():
+            file_path.unlink()
+        if metadata_path.exists():
+            metadata_path.unlink()
+        raise HTTPException(status_code=404, detail="File expired")
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # For non-images, redirect to raw download
+    if not is_image_file(filename):
+        return RedirectResponse(f"/d/{file_id}/{filename}")
+
+    download_url = f"/d/{file_id}/{filename}"
+    share_url = f"{BASE_URL}/v/{file_id}/{filename}"
+
+    return HTMLResponse(VIEWER_TEMPLATE.format(
+        filename=filename,
+        image_url=download_url,
+        download_url=download_url,
+        share_url=share_url,
+        expiry_text=format_expiry(metadata.expires_in),
+    ))
 
 
 @app.post("/admin/set-all-infinite")
