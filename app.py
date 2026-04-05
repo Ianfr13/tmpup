@@ -888,13 +888,14 @@ async def download_file(file_id: str, filename: str):
     inline_types = {"image/", "video/", "audio/", "text/", "application/pdf"}
     is_inline = any(content_type.startswith(t) for t in inline_types)
 
-    # Use RFC 5987 encoding for non-ASCII filenames (e.g. accented chars, spaces)
-    from urllib.parse import quote as urlquote
-    encoded_filename = urlquote(filename, safe="")
-    disposition = "inline" if is_inline else "attachment"
-    headers = {
-        "Content-Disposition": f"{disposition}; filename*=UTF-8''{encoded_filename}"
-    }
+    # Inline types: just "inline" without filename so browser renders instead of downloads
+    # Attachment types: RFC 5987 encoded filename for correct download name
+    if is_inline:
+        headers = {"Content-Disposition": "inline"}
+    else:
+        from urllib.parse import quote as urlquote
+        encoded_filename = urlquote(filename, safe="")
+        headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
 
     return FileResponse(
         path=file_path,
