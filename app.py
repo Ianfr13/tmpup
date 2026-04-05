@@ -948,7 +948,7 @@ VIEWER_TEMPLATE = """<!DOCTYPE html>
 </div>
 <div class="viewer-actions">
   <a class="btn btn-primary" href="{download_url}" download="{filename}">&#11015; Download</a>
-  <button class="btn" onclick="navigator.clipboard.writeText('{share_url}').then(()=>this.textContent='&#10003; Copiado!')">&#128203; Copiar link</button>
+  <button class="btn" onclick="navigator.clipboard.writeText('{image_url_abs}').then(()=>this.textContent='&#10003; Copiado!')">&#128203; Copiar URL da imagem</button>
 </div>
 </body>
 </html>"""
@@ -997,14 +997,13 @@ async def view_file(file_id: str, filename: str):
     if not is_image_file(filename):
         return RedirectResponse(f"/d/{file_id}/{filename}")
 
-    download_url = f"/d/{file_id}/{filename}"
-    share_url = f"{BASE_URL}/v/{file_id}/{filename}"
+    image_url_abs = f"{BASE_URL}/d/{file_id}/{filename}"
 
     return HTMLResponse(VIEWER_TEMPLATE.format(
         filename=filename,
-        image_url=download_url,
-        download_url=download_url,
-        share_url=share_url,
+        image_url=f"/d/{file_id}/{filename}",
+        download_url=f"/d/{file_id}/{filename}",
+        image_url_abs=image_url_abs,
         expiry_text=format_expiry(metadata.expires_in),
     ))
 
