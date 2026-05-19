@@ -30,6 +30,13 @@ GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 ALLOWED_DOMAIN = "douravita.com.br"
 SESSION_MAX_AGE = 86400 * 7  # 7 days
 
+# API-key auth alternativa pra clients headless (pipeline UGC, scripts, CI).
+# Comma-separated lista de chaves válidas em TMPUP_API_KEYS.
+# Vazio = API-key auth desabilitada (só cookie de sessão funciona).
+import secrets as _secrets
+_API_KEYS_RAW = os.environ.get("TMPUP_API_KEYS", "").strip()
+API_KEYS: set[str] = {k.strip() for k in _API_KEYS_RAW.split(",") if k.strip()}
+
 _serializer = URLSafeTimedSerializer(SECRET_KEY)
 
 PUBLIC_PATHS = {"/health", "/auth/login", "/auth/google", "/auth/callback", "/auth/logout"}
@@ -46,16 +53,47 @@ def verify_session(token: str) -> Optional[str]:
         return None
 
 
+def verify_api_key(request: Request) -> Optional[str]:
+    """Valida X-API-Key header (constant-time compare).
+
+    Retorna o nome simbólico do client autenticado ('api-key-client') quando
+    a chave bate com qualquer entry de TMPUP_API_KEYS. None caso contrário
+    (ou se TMPUP_API_KEYS não está configurado).
+    """
+    if not API_KEYS:
+        return None
+    provided = request.headers.get("X-API-Key", "")
+    if not provided:
+        return None
+    for valid_key in API_KEYS:
+        if _secrets.compare_digest(provided, valid_key):
+            return "api-key-client"
+    return None
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
         if path in PUBLIC_PATHS or path.startswith("/d/") or path.startswith("/v/"):
             return await call_next(request)
 
+        # 1) Tenta cookie de sessão (browser flow)
         email = verify_session(request.cookies.get("session", ""))
-        if not email:
+        if email:
+            return await call_next(request)
+
+        # 2) Tenta X-API-Key (headless flow — pipeline UGC, scripts)
+        if verify_api_key(request):
+            return await call_next(request)
+
+        # 3) Browser → redireciona pro login; API client → 401 JSON
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept:
             return RedirectResponse("/auth/login", status_code=302)
-        return await call_next(request)
+        return JSONResponse(
+            {"error": "unauthorized", "detail": "Provide session cookie or X-API-Key header"},
+            status_code=401,
+        )
 
 
 app = FastAPI(title="TmpUp", description="Temporary File Upload Service")
