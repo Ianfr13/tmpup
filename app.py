@@ -3,6 +3,8 @@ Temporary File Upload Service
 Lightweight service for temporary file storage with auto-expiration
 """
 import asyncio
+import base64
+from contextlib import AsyncExitStack
 import json
 import mimetypes
 import os
@@ -16,6 +18,8 @@ import httpx
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
+from mcp.server import MCPServer
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 import uvicorn
 
@@ -29,6 +33,7 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 ALLOWED_DOMAIN = "douravita.com.br"
 SESSION_MAX_AGE = 86400 * 7  # 7 days
+MAX_MCP_UPLOAD_SIZE = 200 * 1024 * 1024  # 200MB limit for MCP upload tool
 
 # API-key auth alternativa pra clients headless (pipeline UGC, scripts, CI).
 # Comma-separated lista de chaves válidas em TMPUP_API_KEYS.
@@ -619,11 +624,122 @@ class FileMetadata:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def log_event(event: str, **fields):
+    """Structured logging helper."""
+    print(json.dumps({"svc": "tmpup", "event": event, **fields}))
+
+
+def validate_ttl(ttl: int) -> int:
+    """Validate TTL: 0 means never expires, otherwise between 1 and 31536000 seconds."""
+    if isinstance(ttl, bool) or not isinstance(ttl, int):
+        raise ValueError("TTL must be a valid integer")
+    if ttl < 0 or ttl > 86400 * 365:
+        raise ValueError("TTL must be 0 (never expires) or between 1 and 31536000 seconds")
+    return ttl
+
+
 def get_file_paths(file_id: str) -> tuple[Path, Path]:
     """Get paths for file and its metadata"""
-    file_path = DATA_DIR / file_id
-    metadata_path = DATA_DIR / f"{file_id}.meta.json"
+    try:
+        val = uuid.UUID(str(file_id))
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError(f"Invalid file ID: {file_id}")
+    file_path = DATA_DIR / str(val)
+    metadata_path = DATA_DIR / f"{val}.meta.json"
     return file_path, metadata_path
+
+
+def _file_meta_dict(metadata: FileMetadata) -> dict:
+    """Format FileMetadata into a public metadata dictionary."""
+    return {
+        "id": metadata.file_id,
+        "filename": metadata.filename,
+        "url": f"{BASE_URL}/d/{metadata.file_id}/{metadata.filename}",
+        "view_url": f"{BASE_URL}/v/{metadata.file_id}/{metadata.filename}",
+        "is_image": is_image_file(metadata.filename),
+        "expires_in": metadata.expires_in,
+        "created_at": metadata.created_at,
+    }
+
+
+def _list_active_files() -> list[dict]:
+    """List active (non-expired) files with metadata"""
+    files = []
+    for metadata_file in DATA_DIR.glob("*.meta.json"):
+        metadata = FileMetadata.from_file(metadata_file)
+        if metadata and not metadata.is_expired:
+            files.append(_file_meta_dict(metadata))
+    return sorted(files, key=lambda x: x["created_at"], reverse=True)
+
+
+def _get_file_info(file_id: str) -> Optional[dict]:
+    """Get metadata dict for a single active file, or None if not found/expired."""
+    try:
+        file_path, metadata_path = get_file_paths(file_id)
+    except ValueError:
+        return None
+    metadata = FileMetadata.from_file(metadata_path)
+    if not metadata or metadata.is_expired or not file_path.exists():
+        return None
+    return _file_meta_dict(metadata)
+
+
+def delete_file_by_id(file_id: str) -> bool:
+    """Remove file and metadata sidecar by file ID. Returns True if deleted, False otherwise."""
+    try:
+        file_path, metadata_path = get_file_paths(file_id)
+    except ValueError:
+        log_event("file_delete_failed", file_id=file_id, reason="not_found")
+        return False
+
+    if not file_path.exists() and not metadata_path.exists():
+        log_event("file_delete_failed", file_id=file_id, reason="not_found")
+        return False
+
+    try:
+        if file_path.exists():
+            file_path.unlink()
+        if metadata_path.exists():
+            metadata_path.unlink()
+    except FileNotFoundError:
+        log_event("file_delete_failed", file_id=file_id, reason="not_found")
+        return False
+    except Exception as e:
+        log_event("file_delete_failed", file_id=file_id, error=str(e))
+        raise
+
+    log_event("file_deleted", file_id=file_id)
+    return True
+
+
+def extend_file_ttl(file_id: str, ttl: int) -> Optional[dict]:
+    """Reload metadata, validate TTL, set created_at=time.time() and ttl=new value, save, return updated dict or None."""
+    try:
+        valid_ttl = validate_ttl(ttl)
+    except ValueError as e:
+        log_event("extend_ttl_failed", file_id=file_id, ttl=ttl, error=str(e))
+        raise
+
+    try:
+        file_path, metadata_path = get_file_paths(file_id)
+    except ValueError:
+        log_event("extend_ttl_failed", file_id=file_id, reason="not_found")
+        return None
+
+    metadata = FileMetadata.from_file(metadata_path)
+    if not metadata or metadata.is_expired or not file_path.exists():
+        log_event("extend_ttl_failed", file_id=file_id, reason="not_found")
+        return None
+
+    try:
+        metadata.created_at = time.time()
+        metadata.ttl = valid_ttl
+        metadata.save(metadata_path)
+        log_event("extend_ttl_success", file_id=file_id, ttl=valid_ttl)
+        return _get_file_info(file_id)
+    except Exception as e:
+        log_event("extend_ttl_failed", file_id=file_id, error=str(e))
+        raise
 
 
 def cleanup_expired_files():
@@ -633,7 +749,10 @@ def cleanup_expired_files():
         metadata = FileMetadata.from_file(metadata_file)
         if metadata and metadata.is_expired:
             file_id = metadata.file_id
-            file_path, metadata_path = get_file_paths(file_id)
+            try:
+                file_path, metadata_path = get_file_paths(file_id)
+            except ValueError:
+                continue
 
             # Delete file and metadata
             try:
@@ -657,11 +776,19 @@ async def cleanup_task():
 
 
 # ---------------------------------------------------------------------------
-# Startup
+# MCP Server
+# ---------------------------------------------------------------------------
+mcp = MCPServer("TmpUp")
+mcp_exit_stack = AsyncExitStack()
+
+
+# ---------------------------------------------------------------------------
+# Startup / Shutdown
 # ---------------------------------------------------------------------------
 @app.on_event("startup")
 async def startup_event():
     """Start background cleanup task and migrate existing files to infinite TTL"""
+    await mcp_exit_stack.enter_async_context(mcp.session_manager.run())
     # One-time migration: set all existing files to never expire
     migrated = 0
     for metadata_file in DATA_DIR.glob("*.meta.json"):
@@ -676,6 +803,12 @@ async def startup_event():
     asyncio.create_task(cleanup_task())
     print(f"TmpUp started - data directory: {DATA_DIR}")
     print(f"Auto-cleanup every {CLEANUP_INTERVAL} seconds")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await mcp_exit_stack.aclose()
+
 
 
 # ---------------------------------------------------------------------------
@@ -802,26 +935,55 @@ async def health_check():
 
 
 @app.get("/api/files")
-async def list_files():
+async def api_list_files():
     """List active (non-expired) files with metadata"""
-    files = []
-    for metadata_file in DATA_DIR.glob("*.meta.json"):
-        metadata = FileMetadata.from_file(metadata_file)
-        if metadata and not metadata.is_expired:
-            files.append({
-                "id": metadata.file_id,
-                "filename": metadata.filename,
-                "url": f"{BASE_URL}/d/{metadata.file_id}/{metadata.filename}",
-                "view_url": f"{BASE_URL}/v/{metadata.file_id}/{metadata.filename}",
-                "is_image": is_image_file(metadata.filename),
-                "expires_in": metadata.expires_in,
-                "created_at": metadata.created_at
-            })
-    return sorted(files, key=lambda x: x["created_at"], reverse=True)
+    return await run_in_threadpool(_list_active_files)
+
+
+@app.get("/api/files/{file_id}")
+async def get_file(file_id: str):
+    """Get metadata for a specific active file"""
+    info = await run_in_threadpool(_get_file_info, file_id)
+    if not info:
+        raise HTTPException(status_code=404, detail="File not found")
+    return info
+
+
+@app.delete("/api/files/{file_id}")
+async def delete_file_endpoint(file_id: str):
+    """Delete a file and its metadata"""
+    deleted = await run_in_threadpool(delete_file_by_id, file_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="File not found")
+    return {"deleted": True}
+
+
+@app.patch("/api/files/{file_id}/ttl")
+async def patch_file_ttl(file_id: str, request: Request):
+    """Extend or update TTL for an existing file"""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    if not isinstance(body, dict) or "ttl" not in body:
+        raise HTTPException(status_code=400, detail="'ttl' field is required")
+
+    try:
+        valid_ttl = validate_ttl(body["ttl"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    updated = await run_in_threadpool(extend_file_ttl, file_id, valid_ttl)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    return updated
+
+
 
 
 @app.post("/api/upload")
-async def upload_file(request: Request):
+async def api_upload_file(request: Request):
     """
     Upload a file with automatic expiration
 
@@ -845,8 +1007,10 @@ async def upload_file(request: Request):
         raise HTTPException(status_code=400, detail="X-TTL must be a valid integer")
 
     # Validate TTL (0 = never expires)
-    if ttl < 0 or (ttl > 86400 * 365 and ttl != 0):
-        raise HTTPException(status_code=400, detail="TTL must be 0 (never expires) or between 1 and 31536000 seconds")
+    try:
+        ttl = validate_ttl(ttl)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # Generate unique file ID
     file_id = str(uuid.uuid4())
@@ -897,7 +1061,10 @@ async def download_file(file_id: str, filename: str):
 
     Returns 404 if file not found or expired
     """
-    file_path, metadata_path = get_file_paths(file_id)
+    try:
+        file_path, metadata_path = get_file_paths(file_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="File not found")
 
     # Load metadata
     metadata = FileMetadata.from_file(metadata_path)
@@ -1016,7 +1183,10 @@ def format_expiry(expires_in: int) -> str:
 @app.get("/v/{file_id}/{filename}", response_class=HTMLResponse)
 async def view_file(file_id: str, filename: str):
     """Viewer page for images"""
-    file_path, metadata_path = get_file_paths(file_id)
+    try:
+        file_path, metadata_path = get_file_paths(file_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="File not found")
 
     metadata = FileMetadata.from_file(metadata_path)
     if not metadata:
@@ -1064,6 +1234,103 @@ async def set_all_infinite():
 async def root():
     """Serve the upload frontend"""
     return HTMLResponse(content=HTML_TEMPLATE)
+
+
+# ---------------------------------------------------------------------------
+# MCP Tools & App Mount
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def upload_file(filename: str, content_base64: str, ttl: int = 0) -> dict:
+    """Upload a file encoded in base64 with TTL in seconds (0 = never expires)."""
+    try:
+        valid_ttl = validate_ttl(ttl)
+    except ValueError as e:
+        log_event("mcp_upload_failed", filename=filename, ttl=ttl, error=str(e))
+        raise
+
+    # Reject payloads whose decoded size would exceed MAX_MCP_UPLOAD_SIZE (200MB)
+    pad = 2 if content_base64.endswith("==") else (1 if content_base64.endswith("=") else 0)
+    estimated_size = (len(content_base64) * 3 // 4) - pad
+    if estimated_size > MAX_MCP_UPLOAD_SIZE:
+        log_event("mcp_upload_failed", filename=filename, error=f"File exceeds maximum allowed size ({MAX_MCP_UPLOAD_SIZE // (1024 * 1024)}MB)")
+        raise ValueError(f"File exceeds maximum allowed size ({MAX_MCP_UPLOAD_SIZE // (1024 * 1024)}MB)")
+
+    try:
+        content = base64.b64decode(content_base64, validate=True)
+    except Exception as e:
+        log_event("mcp_upload_failed", filename=filename, error=f"Invalid base64: {e}")
+        raise ValueError(f"Invalid base64: {e}") from e
+
+    if len(content) == 0:
+        log_event("mcp_upload_failed", filename=filename, error="Empty file")
+        raise ValueError("Empty file")
+
+    if len(content) > MAX_MCP_UPLOAD_SIZE:
+        log_event("mcp_upload_failed", filename=filename, error=f"File exceeds maximum allowed size ({MAX_MCP_UPLOAD_SIZE // (1024 * 1024)}MB)")
+        raise ValueError(f"File exceeds maximum allowed size ({MAX_MCP_UPLOAD_SIZE // (1024 * 1024)}MB)")
+
+    file_id = str(uuid.uuid4())
+    file_path, metadata_path = get_file_paths(file_id)
+
+    try:
+        with open(file_path, "wb") as f:
+            f.write(content)
+
+        metadata = FileMetadata(
+            file_id=file_id,
+            filename=filename,
+            ttl=valid_ttl,
+            created_at=time.time(),
+        )
+        metadata.save(metadata_path)
+
+        log_event("mcp_upload_success", file_id=file_id, filename=filename, size=len(content), ttl=valid_ttl)
+        return {
+            "url": f"{BASE_URL}/d/{file_id}/{filename}",
+            "id": file_id,
+            "expires_in": valid_ttl,
+        }
+    except Exception as e:
+        if file_path.exists():
+            file_path.unlink()
+        if metadata_path.exists():
+            metadata_path.unlink()
+        log_event("mcp_upload_failed", filename=filename, error=str(e))
+        raise
+
+
+@mcp.tool()
+def list_files() -> list[dict]:
+    """List active (non-expired) files with metadata."""
+    return _list_active_files()
+
+
+@mcp.tool()
+def get_file_info(file_id: str) -> dict:
+    """Get metadata for a specific active file."""
+    info = _get_file_info(file_id)
+    if not info:
+        raise ValueError(f"File not found: {file_id}")
+    return info
+
+
+@mcp.tool()
+def extend_ttl(file_id: str, ttl: int) -> dict:
+    """Extend or update TTL for an existing file."""
+    info = extend_file_ttl(file_id, ttl)
+    if not info:
+        raise ValueError(f"File not found: {file_id}")
+    return info
+
+
+@mcp.tool()
+def delete_file(file_id: str) -> dict:
+    """Delete a file by ID."""
+    deleted = delete_file_by_id(file_id)
+    return {"deleted": deleted}
+
+
+app.mount("/mcp", mcp.streamable_http_app(streamable_http_path="/"))
 
 
 if __name__ == "__main__":
