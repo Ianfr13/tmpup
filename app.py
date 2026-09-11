@@ -5,6 +5,7 @@ Lightweight service for temporary file storage with auto-expiration
 import asyncio
 import base64
 from contextlib import AsyncExitStack
+import html
 import json
 import mimetypes
 import os
@@ -127,9 +128,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     display:flex;flex-direction:column;align-items:center;
     padding:24px 16px;
   }
+  a{color:#3b82f6}
+  a:hover{color:#60a5fa}
   h1{font-size:1.8rem;font-weight:700;margin-bottom:4px;color:#fff}
-  .subtitle{color:#737373;font-size:.9rem;margin-bottom:32px}
+  .subtitle{color:#737373;font-size:.9rem;margin-bottom:14px}
   .container{width:100%;max-width:640px}
+
+  .summary-bar{text-align:center;font-size:.82rem;color:#737373;margin-bottom:18px}
+  .summary-bar strong{color:#e5e5e5;font-weight:600}
+  .summary-warn{color:#fbbf24}
 
   /* Drop zone */
   .dropzone{
@@ -139,109 +146,98 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
   .dropzone.dragover{border-color:#3b82f6;background:#1a1a2e}
   .dropzone:hover{border-color:#555}
-  .dropzone-icon{font-size:3rem;margin-bottom:12px;display:block}
+  .dropzone-icon{width:40px;height:40px;color:#525252;margin-bottom:12px}
   .dropzone-text{color:#a3a3a3;font-size:.95rem;line-height:1.6}
   .dropzone-text strong{color:#e5e5e5}
-  .dropzone input[type=file]{
-    position:absolute;inset:0;opacity:0;cursor:pointer;
-  }
+  .dropzone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}
+  .dropzone-hint{font-size:.8rem;color:#525252;margin-top:4px}
 
   /* TTL selector */
-  .controls{
-    display:flex;gap:12px;margin-top:16px;align-items:center;
-    flex-wrap:wrap;justify-content:center;
-  }
-  .controls label{color:#a3a3a3;font-size:.85rem}
-  .controls select{
-    background:#262626;color:#e5e5e5;border:1px solid #333;
-    border-radius:8px;padding:8px 12px;font-size:.85rem;
-    cursor:pointer;outline:none;
-  }
+  .controls{display:flex;gap:12px;margin-top:16px;align-items:center;flex-wrap:wrap;justify-content:center}
+  .controls label{color:#a3a3a3;font-size:.85rem;display:flex;align-items:center;gap:6px}
+  .controls select{background:#262626;color:#e5e5e5;border:1px solid #333;border-radius:8px;padding:8px 12px;font-size:.85rem;cursor:pointer;outline:none}
   .controls select:focus{border-color:#3b82f6}
-  .btn-upload{
-    background:#3b82f6;color:#fff;border:none;border-radius:8px;
-    padding:10px 24px;font-size:.9rem;font-weight:600;cursor:pointer;
-    transition:background .15s;
-  }
+  .btn-upload{background:#3b82f6;color:#fff;border:none;border-radius:8px;padding:10px 24px;font-size:.9rem;font-weight:600;cursor:pointer;transition:background .15s}
   .btn-upload:hover{background:#2563eb}
   .btn-upload:disabled{opacity:.5;cursor:not-allowed}
 
   /* Progress */
-  .progress-wrap{
-    margin-top:16px;display:none;
-  }
+  .progress-wrap{margin-top:16px;display:none}
   .progress-wrap.active{display:block}
-  .progress-bar-bg{
-    width:100%;height:8px;background:#262626;border-radius:4px;overflow:hidden;
-  }
-  .progress-bar{
-    height:100%;width:0;background:linear-gradient(90deg,#3b82f6,#60a5fa);
-    border-radius:4px;transition:width .2s;
-  }
-  .progress-text{
-    text-align:center;color:#a3a3a3;font-size:.8rem;margin-top:6px;
-  }
+  .progress-bar-bg{width:100%;height:8px;background:#262626;border-radius:4px;overflow:hidden}
+  .progress-bar{height:100%;width:0;background:linear-gradient(90deg,#3b82f6,#60a5fa);border-radius:4px;transition:width .2s}
+  .progress-text{text-align:center;color:#a3a3a3;font-size:.8rem;margin-top:6px}
 
   /* Status message */
-  .status{
-    margin-top:12px;text-align:center;font-size:.85rem;min-height:20px;
-  }
+  .status{margin-top:12px;text-align:center;font-size:.85rem;min-height:20px}
   .status.error{color:#ef4444}
   .status.success{color:#22c55e}
 
+  /* Filter bar */
+  .filter-bar{margin-top:32px;display:flex;flex-direction:column;gap:10px}
+  .search-wrap{position:relative}
+  .search-icon{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:16px;height:16px;color:#525252;pointer-events:none}
+  .search-input{width:100%;background:#1a1a1a;border:1px solid #262626;border-radius:8px;padding:9px 12px 9px 34px;font-size:.85rem;color:#e5e5e5;outline:none}
+  .search-input:focus{border-color:#3b82f6}
+  .search-input::placeholder{color:#525252}
+  .filter-row2{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .chip-row{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{background:#1a1a1a;border:1px solid #262626;border-radius:999px;padding:6px 14px;font-size:.8rem;color:#a3a3a3;cursor:pointer}
+  .chip.active{background:rgba(59,130,246,.15);border-color:#3b82f6;color:#60a5fa}
+  .sort-select{margin-left:auto;background:#1a1a1a;color:#a3a3a3;border:1px solid #262626;border-radius:8px;padding:6px 10px;font-size:.8rem}
+
+  /* Bulk bar */
+  .bulk-bar{display:none;align-items:center;gap:10px;flex-wrap:wrap;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.35);border-radius:10px;padding:10px 14px;margin-top:14px;font-size:.82rem;color:#93c5fd}
+  .bulk-bar.active{display:flex}
+  .bulk-bar .spacer{flex:1}
+  .bulk-btn{background:#262626;border:1px solid #333;border-radius:7px;padding:6px 12px;font-size:.78rem;color:#e5e5e5;cursor:pointer;display:inline-flex;align-items:center;gap:5px}
+  .bulk-btn svg{width:13px;height:13px}
+  .bulk-btn.danger{color:#fca5a5}
+  .bulk-btn.danger:hover{background:rgba(239,68,68,.14);border-color:#ef4444}
+  .bulk-cancel{background:none;border:none;color:#93c5fd;font-size:.78rem;cursor:pointer;text-decoration:underline}
+
   /* File list */
-  .file-list{margin-top:32px}
+  .file-list{margin-top:20px}
   .file-list h2{font-size:1.1rem;color:#fff;margin-bottom:12px;display:flex;align-items:center;gap:8px}
-  .file-card{
-    background:#1a1a1a;border:1px solid #262626;border-radius:12px;
-    padding:14px 16px;margin-bottom:10px;
-    display:flex;align-items:center;gap:12px;
-    transition:border-color .15s;
-  }
+  .file-list h2 svg{width:18px;height:18px;color:#737373}
+  .file-card{background:#1a1a1a;border:1px solid #262626;border-radius:12px;padding:14px 16px;margin-bottom:10px;display:flex;align-items:center;gap:12px;transition:border-color .15s}
   .file-card:hover{border-color:#333}
+  .file-lead{display:flex;align-items:center;gap:12px;flex-shrink:0}
+  .select-box{width:16px;height:16px;accent-color:#3b82f6;cursor:pointer;flex-shrink:0}
   .file-icon{font-size:1.5rem;flex-shrink:0}
   .file-info{flex:1;min-width:0}
-  .file-name{
-    font-size:.9rem;font-weight:500;color:#e5e5e5;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  }
+  .file-name{font-size:.9rem;font-weight:500;color:#e5e5e5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .file-meta{font-size:.75rem;color:#737373;margin-top:2px;display:flex;gap:12px;flex-wrap:wrap}
+  .file-meta span{display:inline-flex;align-items:center;gap:4px}
+  .file-meta svg{width:12px;height:12px}
+  .file-meta .soon{color:#fbbf24}
+  .file-metrics{font-size:.72rem;color:#525252;margin-top:4px;display:flex;flex-direction:column;gap:2px}
+  .file-metrics span{display:inline-flex;align-items:center;gap:4px}
+  .file-metrics svg{width:11px;height:11px;flex-shrink:0}
+  .file-metrics .zero{color:#3f3f3f}
+  .renew-row{margin-top:8px;display:flex;gap:6px;flex-wrap:wrap}
+  .renew-chip{background:#0f0f0f;border:1px solid #3b82f6;color:#93c5fd;border-radius:999px;padding:4px 10px;font-size:.72rem;cursor:pointer}
+  .renew-chip:hover{background:rgba(59,130,246,.15)}
   .file-actions{display:flex;gap:6px;flex-shrink:0}
-  .btn-icon{
-    background:#262626;border:1px solid #333;border-radius:8px;
-    padding:8px 10px;cursor:pointer;font-size:.85rem;color:#e5e5e5;
-    transition:all .15s;text-decoration:none;display:inline-flex;align-items:center;gap:4px;
-  }
+  .btn-icon{background:#262626;border:1px solid #333;border-radius:8px;padding:8px 10px;cursor:pointer;font-size:.85rem;color:#e5e5e5;transition:all .15s;text-decoration:none;display:inline-flex;align-items:center;gap:4px}
   .btn-icon:hover{background:#333;border-color:#444}
+  .btn-icon svg{width:14px;height:14px}
   .btn-icon.copied{background:#166534;border-color:#22c55e;color:#22c55e}
+  .btn-icon.active{background:rgba(59,130,246,.15);border-color:#3b82f6;color:#60a5fa}
+  .btn-icon.danger{color:#fca5a5}
+  .btn-icon.danger:hover{background:rgba(239,68,68,.12);border-color:#ef4444}
+  .btn-icon.danger-confirm{background:#7f1d1d;border-color:#ef4444;color:#fecaca}
+  .file-thumb{width:44px;height:44px;object-fit:cover;border-radius:8px;flex-shrink:0;border:1px solid #333;background:#262626}
+  .empty-state{text-align:center;color:#525252;padding:32px;font-size:.9rem}
 
-  /* Image thumbnail */
-  .file-thumb{
-    width:52px;height:52px;object-fit:cover;border-radius:8px;
-    flex-shrink:0;border:1px solid #333;background:#262626;
-  }
-
-  /* Empty state */
-  .empty-state{
-    text-align:center;color:#525252;padding:32px;font-size:.9rem;
-  }
-
-
-  /* Responsive */
   @media(max-width:480px){
     .dropzone{padding:32px 16px}
-    .dropzone-icon{font-size:2.4rem}
     .file-card{flex-direction:column;align-items:flex-start;gap:8px}
     .file-actions{width:100%;justify-content:flex-end}
+    .sort-select{margin-left:0}
   }
 
-  /* Toast */
-  .toast{
-    position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
-    background:#166534;color:#22c55e;padding:10px 20px;border-radius:8px;
-    font-size:.85rem;opacity:0;transition:opacity .3s;pointer-events:none;
-    border:1px solid #22c55e;z-index:999;
-  }
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#166534;color:#22c55e;padding:10px 20px;border-radius:8px;font-size:.85rem;opacity:0;transition:opacity .3s;pointer-events:none;border:1px solid #22c55e;z-index:999}
   .toast.show{opacity:1}
 </style>
 </head>
@@ -249,28 +245,26 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 <div style="position:absolute;top:16px;right:16px;display:flex;align-items:center;gap:10px">
   <span id="userEmail" style="color:#525252;font-size:.8rem"></span>
-  <a href="/auth/logout" style="color:#737373;font-size:.8rem;text-decoration:none;
-    border:1px solid #333;border-radius:6px;padding:4px 10px;transition:all .15s"
-    onmouseover="this.style.color='#e5e5e5'" onmouseout="this.style.color='#737373'">Sair</a>
+  <a href="/auth/logout" style="color:#737373;font-size:.8rem;text-decoration:none;border:1px solid #333;border-radius:6px;padding:4px 10px;transition:all .15s" onmouseover="this.style.color='#e5e5e5'" onmouseout="this.style.color='#737373'">Sair</a>
 </div>
 <h1>TmpUp</h1>
 <p class="subtitle">Upload temporario de arquivos</p>
 
 <div class="container">
-  <!-- Drop Zone -->
+  <div class="summary-bar" id="summaryBar"></div>
+
   <div class="dropzone" id="dropzone">
     <input type="file" id="fileInput" multiple>
-    <span class="dropzone-icon">&#128193;</span>
+    <svg class="dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4.5 4.5 0 0 1-.4-8.98A5.5 5.5 0 0 1 17.4 8.02 4 4 0 0 1 17 16"/><path d="M12 12v8"/><path d="m9 15 3-3 3 3"/></svg>
     <div class="dropzone-text">
       <strong>Arraste arquivos aqui</strong><br>
-      ou clique para selecionar<br>
-      <span style="font-size:.8rem;color:#525252">sem limite de tamanho</span>
+      ou clique para selecionar
     </div>
+    <div class="dropzone-hint">sem limite de tamanho &middot; ou cole com Ctrl+V</div>
   </div>
 
-  <!-- Controls -->
   <div class="controls">
-    <label for="ttlSelect">&#9200; Expira em:</label>
+    <label for="ttlSelect"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> Expira em:</label>
     <select id="ttlSelect">
       <option value="0" selected>Nunca expira</option>
       <option value="3600">1 hora</option>
@@ -282,23 +276,58 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <button class="btn-upload" id="btnUpload" disabled>Enviar</button>
   </div>
 
-  <!-- Progress -->
   <div class="progress-wrap" id="progressWrap">
     <div class="progress-bar-bg"><div class="progress-bar" id="progressBar"></div></div>
     <div class="progress-text" id="progressText">Enviando...</div>
   </div>
 
-  <!-- Status -->
   <div class="status" id="status"></div>
 
-  <!-- File list -->
+  <div class="filter-bar">
+    <div class="search-wrap">
+      <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <input class="search-input" id="searchInput" placeholder="Buscar por nome...">
+    </div>
+    <div class="filter-row2">
+      <div class="chip-row" id="chipRow">
+        <button class="chip active" data-kind="all">Todos</button>
+        <button class="chip" data-kind="image">Imagens</button>
+        <button class="chip" data-kind="document">Documentos</button>
+        <button class="chip" data-kind="video">Videos</button>
+        <button class="chip" data-kind="archive">Outros</button>
+      </div>
+      <select class="sort-select" id="sortSelect">
+        <option value="date">Mais recente</option>
+        <option value="name">Nome A-Z</option>
+        <option value="size">Maior tamanho</option>
+        <option value="expiry">Expira antes</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="bulk-bar" id="bulkBar">
+    <span id="bulkCount">0 selecionado(s)</span>
+    <div class="spacer"></div>
+    <button class="bulk-btn" id="bulkRenewBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15.4-6.4L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"/><path d="M3 21v-5h5"/></svg>
+      Renovar
+    </button>
+    <button class="bulk-btn danger" id="bulkDeleteBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13"/></svg>
+      Excluir
+    </button>
+    <button class="bulk-cancel" id="bulkCancelBtn">cancelar</button>
+  </div>
+
   <div class="file-list" id="fileListSection">
-    <h2>&#128196; Arquivos enviados</h2>
+    <h2>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+      Arquivos enviados
+    </h2>
     <div id="fileList"></div>
   </div>
 </div>
 
-<!-- Toast -->
 <div class="toast" id="toast"></div>
 
 <script>
@@ -313,23 +342,39 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   const statusEl = document.getElementById('status');
   const fileList = document.getElementById('fileList');
   const toast = document.getElementById('toast');
+  const summaryBar = document.getElementById('summaryBar');
+  const searchInput = document.getElementById('searchInput');
+  const chipRow = document.getElementById('chipRow');
+  const sortSelect = document.getElementById('sortSelect');
+  const bulkBar = document.getElementById('bulkBar');
+  const bulkCount = document.getElementById('bulkCount');
 
   let selectedFiles = [];
+  let allFiles = [];          // raw list from GET /api/files
+  let currentFilter = 'all';
+  let currentQuery = '';
+  let currentSort = 'date';
+  let selectedIds = new Set();
+  let confirmingId = null;    // delete confirm state
+  let renewingId = null;      // renew popover state
 
   // --- Drag & Drop ---
-  ['dragenter','dragover'].forEach(e => {
-    dropzone.addEventListener(e, ev => { ev.preventDefault(); dropzone.classList.add('dragover'); });
-  });
-  ['dragleave','drop'].forEach(e => {
-    dropzone.addEventListener(e, ev => { ev.preventDefault(); dropzone.classList.remove('dragover'); });
-  });
-  dropzone.addEventListener('drop', ev => {
-    const files = Array.from(ev.dataTransfer.files);
-    if(files.length) { setFiles(files); }
-  });
-  fileInput.addEventListener('change', () => {
-    const files = Array.from(fileInput.files);
-    if(files.length) setFiles(files);
+  ['dragenter','dragover'].forEach(e => dropzone.addEventListener(e, ev => { ev.preventDefault(); dropzone.classList.add('dragover'); }));
+  ['dragleave','drop'].forEach(e => dropzone.addEventListener(e, ev => { ev.preventDefault(); dropzone.classList.remove('dragover'); }));
+  dropzone.addEventListener('drop', ev => { const files = Array.from(ev.dataTransfer.files); if(files.length) setFiles(files); });
+  fileInput.addEventListener('change', () => { const files = Array.from(fileInput.files); if(files.length) setFiles(files); });
+
+  // --- Paste to upload ---
+  window.addEventListener('paste', ev => {
+    const items = (ev.clipboardData && ev.clipboardData.items) || [];
+    const imageItem = Array.from(items).find(it => it.type && it.type.startsWith('image/'));
+    if(!imageItem) return;
+    const blob = imageItem.getAsFile();
+    if(!blob) return;
+    const ext = (blob.type.split('/')[1] || 'png').split('+')[0];
+    const file = new File([blob], `print-colado-${Date.now()}.${ext}`, { type: blob.type });
+    setFiles([file]);
+    uploadNow();
   });
 
   function setFiles(files) {
@@ -342,22 +387,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       : `${files.length} arquivos selecionados`;
   }
 
-  // --- Upload ---
-  btnUpload.addEventListener('click', async () => {
+  btnUpload.addEventListener('click', uploadNow);
+
+  async function uploadNow() {
     if(!selectedFiles.length) return;
     btnUpload.disabled = true;
     const ttl = ttlSelect.value;
     let uploaded = 0;
-
     for(const file of selectedFiles) {
       await uploadOne(file, ttl, selectedFiles.length, ++uploaded);
     }
-
     selectedFiles = [];
     fileInput.value = '';
     btnUpload.disabled = true;
     loadFiles();
-  });
+  }
 
   async function uploadOne(file, ttl, total, idx) {
     progressWrap.classList.add('active');
@@ -366,15 +410,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     progressText.textContent = `${prefix}Enviando ${file.name}...`;
     statusEl.className = 'status';
     statusEl.textContent = '';
-
     try {
-      // Use XMLHttpRequest for progress tracking
-      const result = await new Promise((resolve, reject) => {
+      await new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/upload');
         xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name));
         xhr.setRequestHeader('X-TTL', ttl);
-
         xhr.upload.addEventListener('progress', ev => {
           if(ev.lengthComputable) {
             const pct = Math.round((ev.loaded / ev.total) * 100);
@@ -382,32 +423,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             progressText.textContent = `${prefix}Enviando ${file.name}... ${pct}%`;
           }
         });
-
         xhr.addEventListener('load', () => {
-          if(xhr.status >= 200 && xhr.status < 300) {
-            resolve(JSON.parse(xhr.responseText));
-          } else {
-            let msg = 'Upload failed';
-            try { msg = JSON.parse(xhr.responseText).detail || msg; } catch(e){}
-            reject(new Error(msg));
-          }
+          if(xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+          else { let msg = 'Upload failed'; try { msg = JSON.parse(xhr.responseText).detail || msg; } catch(e){} reject(new Error(msg)); }
         });
         xhr.addEventListener('error', () => reject(new Error('Erro de rede')));
         xhr.send(file);
       });
-
       progressBar.style.width = '100%';
       progressText.textContent = `${prefix}Concluido!`;
       statusEl.className = 'status success';
       statusEl.textContent = `${file.name} enviado com sucesso!`;
-
-      // Save to localStorage
-      saveToHistory(result);
-
-      setTimeout(() => {
-        progressWrap.classList.remove('active');
-      }, 1500);
-
+      setTimeout(() => progressWrap.classList.remove('active'), 1500);
     } catch(err) {
       progressWrap.classList.remove('active');
       statusEl.className = 'status error';
@@ -415,67 +442,229 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     }
   }
 
-  // --- History (localStorage) ---
-  function getHistory() {
-    try { return JSON.parse(localStorage.getItem('tmpup_files') || '[]'); }
-    catch { return []; }
-  }
-  function saveToHistory(result) {
-    const history = getHistory();
-    history.unshift({
-      id: result.id,
-      url: result.url,
-      expires_in: result.expires_in,
-      uploaded_at: Date.now()
-    });
-    // Keep last 50
-    localStorage.setItem('tmpup_files', JSON.stringify(history.slice(0, 50)));
-  }
-
-  // --- File list (from API) ---
+  // --- File list (from real API) ---
   async function loadFiles() {
     try {
       const res = await fetch('/api/files');
-      const files = await res.json();
-      renderFiles(files);
+      if(!res.ok) {
+        fileList.innerHTML = '<div class="empty-state">Erro ao carregar arquivos</div>';
+        return;
+      }
+      const data = await res.json();
+      if(!Array.isArray(data)) {
+        fileList.innerHTML = '<div class="empty-state">Erro ao carregar arquivos</div>';
+        return;
+      }
+      allFiles = data;
+      render();
     } catch(e) {
       fileList.innerHTML = '<div class="empty-state">Erro ao carregar arquivos</div>';
     }
   }
 
-  function renderFiles(files) {
-    if(!files.length) {
-      fileList.innerHTML = '<div class="empty-state">Nenhum arquivo ativo</div>';
-      return;
-    }
-    fileList.innerHTML = files.map(f => {
+  function fileKind(filename) {
+    const ext = (filename.split('.').pop() || '').toLowerCase();
+    if(['png','jpg','jpeg','gif','webp','svg','bmp','avif'].includes(ext)) return 'image';
+    if(['pdf','doc','docx','txt'].includes(ext)) return 'document';
+    if(['mp4','mov','avi','mkv','webm'].includes(ext)) return 'video';
+    return 'archive'; // catch-all "Outros"
+  }
+
+  function render() {
+    renderSummary();
+    const q = currentQuery.trim().toLowerCase();
+    let items = allFiles.filter(f => {
+      const kind = fileKind(f.filename);
+      const matchesFilter = currentFilter === 'all' || kind === currentFilter;
+      const matchesQuery = !q || f.filename.toLowerCase().includes(q);
+      return matchesFilter && matchesQuery;
+    });
+    items = items.slice().sort((a, b) => {
+      if(currentSort === 'name') return a.filename.localeCompare(b.filename);
+      if(currentSort === 'size') return (b.size_bytes||0) - (a.size_bytes||0);
+      if(currentSort === 'expiry') {
+        const ra = a.expires_in < 0 ? Infinity : a.expires_in;
+        const rb = b.expires_in < 0 ? Infinity : b.expires_in;
+        return ra - rb;
+      }
+      return b.created_at - a.created_at;
+    });
+    renderFiles(items);
+    renderBulkBar();
+  }
+
+  function renderSummary() {
+    const totalSize = allFiles.reduce((sum, f) => sum + (f.size_bytes || 0), 0);
+    const expiringSoon = allFiles.filter(f => f.expires_in >= 0 && f.expires_in < 3600).length;
+    let html = `<strong>${allFiles.length}</strong> arquivos &middot; ${formatSize(totalSize)}`;
+    if(expiringSoon > 0) html += ` &middot; <span class="summary-warn">${expiringSoon} expira(m) em breve</span>`;
+    summaryBar.innerHTML = html;
+  }
+
+  function renderFiles(items) {
+    if(!items.length) { fileList.innerHTML = '<div class="empty-state">Nenhum arquivo encontrado</div>'; return; }
+    fileList.innerHTML = items.map(f => {
       const icon = getFileIcon(f.filename);
       const remaining = formatCountdown(f.expires_in);
-      const created = new Date(f.created_at * 1000).toLocaleString('pt-BR', {
-        day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'
-      });
+      const soon = f.expires_in >= 0 && f.expires_in < 3600;
+      const created = new Date(f.created_at * 1000).toLocaleString('pt-BR', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
       const thumbOrIcon = f.is_image
         ? `<img class="file-thumb" src="${esc(f.url)}" alt="${esc(f.filename)}" loading="lazy">`
         : `<span class="file-icon">${icon}</span>`;
       const openBtn = f.is_image
         ? `<a class="btn-icon" href="${esc(f.view_url)}" target="_blank" title="Visualizar">&#128065; Ver</a>`
         : `<a class="btn-icon" href="${esc(f.url)}" target="_blank" title="Abrir">&#128279;</a>`;
+      const isConfirming = confirmingId === f.id;
+      const deleteBtn = isConfirming
+        ? `<button class="btn-icon danger-confirm" data-action="delete" data-id="${f.id}" title="Confirmar exclusao">Excluir?</button>`
+        : `<button class="btn-icon danger" data-action="delete" data-id="${f.id}" title="Excluir">&#128465;</button>`;
+      const isRenewing = renewingId === f.id;
+      const renewRow = isRenewing ? `
+        <div class="renew-row">
+          <button class="renew-chip" data-action="renew-apply" data-id="${f.id}" data-ttl="3600">1 hora</button>
+          <button class="renew-chip" data-action="renew-apply" data-id="${f.id}" data-ttl="86400">24 horas</button>
+          <button class="renew-chip" data-action="renew-apply" data-id="${f.id}" data-ttl="604800">7 dias</button>
+          <button class="renew-chip" data-action="renew-apply" data-id="${f.id}" data-ttl="0">Nunca expira</button>
+        </div>` : '';
+      const views = f.views || 0;
+      const downloads = f.downloads || 0;
       return `<div class="file-card">
-        ${thumbOrIcon}
+        <div class="file-lead">
+          <input class="select-box" type="checkbox" data-action="select" data-id="${f.id}" ${selectedIds.has(f.id) ? 'checked' : ''}>
+          ${thumbOrIcon}
+        </div>
         <div class="file-info">
           <div class="file-name" title="${esc(f.filename)}">${esc(f.filename)}</div>
           <div class="file-meta">
-            <span>&#9200; ${remaining}</span>
+            <span class="${soon ? 'soon' : ''}">&#9200; ${remaining}</span>
             <span>&#128197; ${created}</span>
           </div>
+          <div class="file-metrics">
+            <span class="${views === 0 ? 'zero' : ''}">&#128065; ${views} visualiza${views===1?'cao':'coes'} &middot; ultima: ${formatLast(f.last_viewed_at)}</span>
+            <span class="${downloads === 0 ? 'zero' : ''}">&#11015; ${downloads} download${downloads===1?'':'s'} &middot; ultimo: ${formatLast(f.last_downloaded_at)}</span>
+          </div>
+          ${renewRow}
         </div>
         <div class="file-actions">
-          <button class="btn-icon" onclick="copyLink('${esc(f.url)}', this)" title="Copiar link">&#128203; Copiar</button>
+          <button class="btn-icon ${isRenewing ? 'active' : ''}" data-action="renew-toggle" data-id="${f.id}" title="Renovar validade">&#128260;</button>
+          <button class="btn-icon" data-action="copy" data-url="${esc(f.url)}" title="Copiar link">&#128203;</button>
           ${openBtn}
+          ${deleteBtn}
         </div>
       </div>`;
     }).join('');
   }
+
+  function renderBulkBar() {
+    if(selectedIds.size > 0) {
+      bulkBar.classList.add('active');
+      bulkCount.textContent = `${selectedIds.size} selecionado(s)`;
+    } else {
+      bulkBar.classList.remove('active');
+    }
+  }
+
+  // --- Event delegation on the file list ---
+  fileList.addEventListener('click', async ev => {
+    const btn = ev.target.closest('[data-action]');
+    if(!btn) return;
+    const action = btn.dataset.action;
+    const id = btn.dataset.id;
+
+    if(action === 'copy') { copyLink(btn.dataset.url, btn); return; }
+
+    if(action === 'delete') {
+      if(confirmingId === id) {
+        confirmingId = null;
+        const res = await fetch(`/api/files/${id}`, { method: 'DELETE' });
+        if(res.ok) { showToast('Arquivo removido'); selectedIds.delete(id); await loadFiles(); }
+        else showToast('Erro ao excluir');
+      } else {
+        confirmingId = id;
+        render();
+      }
+      return;
+    }
+
+    if(action === 'renew-toggle') {
+      renewingId = renewingId === id ? null : id;
+      render();
+      return;
+    }
+
+    if(action === 'renew-apply') {
+      const ttl = parseInt(btn.dataset.ttl, 10);
+      renewingId = null;
+      const res = await fetch(`/api/files/${id}/ttl`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttl })
+      });
+      if(res.ok) { showToast('Validade renovada'); await loadFiles(); }
+      else showToast('Erro ao renovar');
+      return;
+    }
+  });
+
+  fileList.addEventListener('change', ev => {
+    const el = ev.target.closest('[data-action="select"]');
+    if(!el) return;
+    const id = el.dataset.id;
+    if(el.checked) selectedIds.add(id); else selectedIds.delete(id);
+    renderBulkBar();
+  });
+
+  // --- Filters / search / sort ---
+  searchInput.addEventListener('input', () => { currentQuery = searchInput.value; render(); });
+  chipRow.addEventListener('click', ev => {
+    const chip = ev.target.closest('.chip');
+    if(!chip) return;
+    currentFilter = chip.dataset.kind;
+    chipRow.querySelectorAll('.chip').forEach(c => c.classList.toggle('active', c === chip));
+    render();
+  });
+  sortSelect.addEventListener('change', () => { currentSort = sortSelect.value; render(); });
+
+  // --- Bulk actions ---
+  document.getElementById('bulkCancelBtn').addEventListener('click', () => { selectedIds.clear(); render(); });
+  document.getElementById('bulkDeleteBtn').addEventListener('click', async () => {
+    const ids = Array.from(selectedIds);
+    if(!ids.length) return;
+    const responses = await Promise.all(ids.map(id => fetch(`/api/files/${id}`, { method: 'DELETE' }).catch(() => null)));
+    let successCount = 0;
+    responses.forEach((res, i) => {
+      if(res && res.ok) {
+        successCount++;
+        selectedIds.delete(ids[i]);
+      }
+    });
+    if(successCount === ids.length) {
+      showToast(`${ids.length} arquivo(s) excluidos`);
+    } else {
+      showToast(`${successCount} de ${ids.length} arquivo(s) excluidos`);
+    }
+    renderBulkBar();
+    await loadFiles();
+  });
+  document.getElementById('bulkRenewBtn').addEventListener('click', async () => {
+    const ids = Array.from(selectedIds);
+    if(!ids.length) return;
+    const responses = await Promise.all(ids.map(id => fetch(`/api/files/${id}/ttl`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttl: 0 })
+    }).catch(() => null)));
+    let successCount = 0;
+    responses.forEach((res, i) => {
+      if(res && res.ok) {
+        successCount++;
+        selectedIds.delete(ids[i]);
+      }
+    });
+    if(successCount === ids.length) {
+      showToast(`${ids.length} arquivo(s) renovados`);
+    } else {
+      showToast(`${successCount} de ${ids.length} arquivo(s) renovados`);
+    }
+    renderBulkBar();
+    await loadFiles();
+  });
 
   function getFileIcon(name) {
     const ext = (name.split('.').pop() || '').toLowerCase();
@@ -491,17 +680,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   }
 
   function formatCountdown(seconds) {
-    if(seconds <= 0) return 'Expirado';
+    if(seconds < 0) return 'Nunca expira';
+    if(seconds === 0) return 'Expirado';
     if(seconds < 60) return `${seconds}s`;
     if(seconds < 3600) return `${Math.floor(seconds/60)}min`;
-    if(seconds < 86400) {
-      const h = Math.floor(seconds/3600);
-      const m = Math.floor((seconds%3600)/60);
-      return `${h}h ${m}min`;
-    }
-    const d = Math.floor(seconds/86400);
-    const h = Math.floor((seconds%86400)/3600);
+    if(seconds < 86400) { const h = Math.floor(seconds/3600); const m = Math.floor((seconds%3600)/60); return `${h}h ${m}min`; }
+    const d = Math.floor(seconds/86400); const h = Math.floor((seconds%86400)/3600);
     return `${d}d ${h}h`;
+  }
+
+  function formatLast(epoch) {
+    if(!epoch) return 'nunca';
+    const diff = Math.max(0, Date.now()/1000 - epoch);
+    if(diff < 60) return 'ha poucos segundos';
+    if(diff < 3600) return `ha ${Math.floor(diff/60)}min`;
+    if(diff < 86400) return `ha ${Math.floor(diff/3600)}h`;
+    return `ha ${Math.floor(diff/86400)}d`;
   }
 
   function formatSize(bytes) {
@@ -511,47 +705,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     return (bytes/1073741824).toFixed(2) + ' GB';
   }
 
-  function esc(s) {
-    const d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
+  function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
-  // --- Copy link ---
-  window.copyLink = function(url, btn) {
+  function copyLink(url, btn) {
     navigator.clipboard.writeText(url).then(() => {
-      btn.classList.add('copied');
-      btn.innerHTML = '&#9989; Copiado';
-      showToast('Link copiado!');
-      setTimeout(() => {
-        btn.classList.remove('copied');
-        btn.innerHTML = '&#128203; Copiar';
-      }, 2000);
+      btn.classList.add('copied'); showToast('Link copiado!');
+      setTimeout(() => btn.classList.remove('copied'), 2000);
     }).catch(() => {
-      // Fallback
-      const ta = document.createElement('textarea');
-      ta.value = url; document.body.appendChild(ta);
-      ta.select(); document.execCommand('copy');
-      document.body.removeChild(ta);
+      const ta = document.createElement('textarea'); ta.value = url; document.body.appendChild(ta);
+      ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
       showToast('Link copiado!');
     });
-  };
-
-  function showToast(msg) {
-    toast.textContent = msg;
-    toast.classList.add('show');
-    setTimeout(() => toast.classList.remove('show'), 2000);
   }
 
-  // --- Countdown refresh ---
-  setInterval(loadFiles, 30000); // refresh every 30s
+  function showToast(msg) { toast.textContent = msg; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2000); }
 
-  // --- Load user email ---
-  fetch('/api/me').then(r=>r.json()).then(d=>{
-    if(d.email) document.getElementById('userEmail').textContent = d.email;
-  });
-
-  // --- Init ---
+  setInterval(loadFiles, 30000);
+  fetch('/api/me').then(r=>r.json()).then(d=>{ if(d.email) document.getElementById('userEmail').textContent = d.email; });
   loadFiles();
 })();
 </script>
@@ -565,11 +735,27 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 class FileMetadata:
     """File metadata stored in JSON sidecar"""
 
-    def __init__(self, file_id: str, filename: str, ttl: int, created_at: float):
+    def __init__(
+        self,
+        file_id: str,
+        filename: str,
+        ttl: int,
+        created_at: float,
+        views: int = 0,
+        downloads: int = 0,
+        last_viewed_at: Optional[float] = None,
+        last_downloaded_at: Optional[float] = None,
+        size_bytes: int = 0,
+    ):
         self.file_id = file_id
         self.filename = filename
         self.ttl = ttl
         self.created_at = created_at
+        self.views = views
+        self.downloads = downloads
+        self.last_viewed_at = last_viewed_at
+        self.last_downloaded_at = last_downloaded_at
+        self.size_bytes = size_bytes
 
     @property
     def expires_at(self) -> float:
@@ -593,7 +779,12 @@ class FileMetadata:
             "file_id": self.file_id,
             "filename": self.filename,
             "ttl": self.ttl,
-            "created_at": self.created_at
+            "created_at": self.created_at,
+            "views": self.views,
+            "downloads": self.downloads,
+            "last_viewed_at": self.last_viewed_at,
+            "last_downloaded_at": self.last_downloaded_at,
+            "size_bytes": self.size_bytes,
         }
 
     @classmethod
@@ -602,7 +793,12 @@ class FileMetadata:
             file_id=data["file_id"],
             filename=data["filename"],
             ttl=data["ttl"],
-            created_at=data["created_at"]
+            created_at=data["created_at"],
+            views=data.get("views", 0),
+            downloads=data.get("downloads", 0),
+            last_viewed_at=data.get("last_viewed_at", None),
+            last_downloaded_at=data.get("last_downloaded_at", None),
+            size_bytes=data.get("size_bytes", 0),
         )
 
     @classmethod
@@ -651,6 +847,14 @@ def get_file_paths(file_id: str) -> tuple[Path, Path]:
 
 def _file_meta_dict(metadata: FileMetadata) -> dict:
     """Format FileMetadata into a public metadata dictionary."""
+    size_bytes = getattr(metadata, "size_bytes", 0) or 0
+    if size_bytes <= 0:
+        try:
+            file_path, _ = get_file_paths(metadata.file_id)
+            size_bytes = file_path.stat().st_size
+        except (FileNotFoundError, ValueError):
+            size_bytes = 0
+
     return {
         "id": metadata.file_id,
         "filename": metadata.filename,
@@ -659,6 +863,11 @@ def _file_meta_dict(metadata: FileMetadata) -> dict:
         "is_image": is_image_file(metadata.filename),
         "expires_in": metadata.expires_in,
         "created_at": metadata.created_at,
+        "size_bytes": size_bytes,
+        "views": metadata.views,
+        "downloads": metadata.downloads,
+        "last_viewed_at": metadata.last_viewed_at,
+        "last_downloaded_at": metadata.last_downloaded_at,
     }
 
 
@@ -1034,7 +1243,8 @@ async def api_upload_file(request: Request):
             file_id=file_id,
             filename=filename,
             ttl=ttl,
-            created_at=time.time()
+            created_at=time.time(),
+            size_bytes=total_written,
         )
         metadata.save(metadata_path)
 
@@ -1055,7 +1265,7 @@ async def api_upload_file(request: Request):
 
 
 @app.get("/d/{file_id}/{filename}")
-async def download_file(file_id: str, filename: str):
+async def download_file(file_id: str, filename: str, dl: Optional[str] = None):
     """
     Download a file by ID and filename
 
@@ -1084,23 +1294,29 @@ async def download_file(file_id: str, filename: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
 
-    # Guess content type
-    content_type, _ = mimetypes.guess_type(filename)
+    # Guess content type using real metadata.filename
+    content_type, _ = mimetypes.guess_type(metadata.filename)
     if not content_type:
         content_type = "application/octet-stream"
 
     # Inline for images/viewable types, attachment for the rest
     inline_types = {"image/", "video/", "audio/", "text/", "application/pdf"}
     is_inline = any(content_type.startswith(t) for t in inline_types)
+    force_download = bool(dl and dl.lower() not in ("0", "false", "no"))
 
-    # Inline types: just "inline" without filename so browser renders instead of downloads
-    # Attachment types: RFC 5987 encoded filename for correct download name
-    if is_inline:
+    now = time.time()
+    if is_inline and not force_download:
+        metadata.views += 1
+        metadata.last_viewed_at = now
         headers = {"Content-Disposition": "inline"}
     else:
+        metadata.downloads += 1
+        metadata.last_downloaded_at = now
         from urllib.parse import quote as urlquote
-        encoded_filename = urlquote(filename, safe="")
+        encoded_filename = urlquote(metadata.filename, safe="")
         headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
+
+    metadata.save(metadata_path)
 
     return FileResponse(
         path=file_path,
@@ -1114,7 +1330,7 @@ VIEWER_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{filename} — TmpUp</title>
+<title>{filename} - TmpUp</title>
 <style>
   *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
   body{{
@@ -1123,39 +1339,108 @@ VIEWER_TEMPLATE = """<!DOCTYPE html>
     display:flex;flex-direction:column;align-items:center;justify-content:center;
     padding:24px 16px;gap:20px;
   }}
-  .viewer-img{{
-    max-width:100%;max-height:80vh;border-radius:12px;
-    box-shadow:0 8px 32px rgba(0,0,0,.6);display:block;
-  }}
-  .viewer-meta{{
-    text-align:center;display:flex;flex-direction:column;align-items:center;gap:8px;
-  }}
-  .viewer-filename{{
-    font-size:1rem;font-weight:600;color:#e5e5e5;word-break:break-all;max-width:640px;
-  }}
+  a{{color:#3b82f6}}
+  a:hover{{color:#60a5fa}}
+  .viewer-img{{max-width:100%;max-height:80vh;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.6);display:block}}
+  .viewer-meta{{text-align:center;display:flex;flex-direction:column;align-items:center;gap:8px}}
+  .viewer-filename{{font-size:1rem;font-weight:600;color:#e5e5e5;word-break:break-all;max-width:640px}}
   .viewer-expiry{{font-size:.8rem;color:#737373}}
+  .viewer-metrics{{font-size:.75rem;color:#525252;display:flex;gap:14px;flex-wrap:wrap;justify-content:center}}
+  .viewer-error{{font-size:.85rem;color:#ef4444;text-align:center;display:none}}
   .viewer-actions{{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}}
-  .btn{{
-    background:#262626;border:1px solid #333;border-radius:8px;
-    padding:10px 18px;cursor:pointer;font-size:.85rem;color:#e5e5e5;
-    text-decoration:none;display:inline-flex;align-items:center;gap:6px;
-    transition:all .15s;
-  }}
+  .btn{{background:#262626;border:1px solid #333;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:.85rem;color:#e5e5e5;text-decoration:none;display:inline-flex;align-items:center;gap:6px;transition:all .15s}}
   .btn:hover{{background:#333;border-color:#444}}
   .btn-primary{{background:#3b82f6;border-color:#3b82f6;color:#fff}}
   .btn-primary:hover{{background:#2563eb;border-color:#2563eb}}
+  .btn-danger{{color:#fca5a5;border-color:#333}}
+  .btn-danger:hover{{background:rgba(239,68,68,.12);border-color:#ef4444}}
+  .btn-danger.confirm{{background:#7f1d1d;border-color:#ef4444;color:#fecaca}}
+  .deleted-card{{background:#1a1a1a;border:1px solid #262626;border-radius:16px;padding:40px 32px;text-align:center;max-width:340px;display:none;flex-direction:column;align-items:center;gap:14px}}
+  .deleted-card.active{{display:flex}}
+  .deleted-title{{font-size:1.05rem;font-weight:600;color:#fff}}
+  .deleted-sub{{font-size:.85rem;color:#737373}}
 </style>
 </head>
 <body>
-<img class="viewer-img" src="{image_url}" alt="{filename}">
-<div class="viewer-meta">
-  <div class="viewer-filename">{filename}</div>
-  <div class="viewer-expiry">{expiry_text}</div>
+
+<div id="viewerContent">
+  <img class="viewer-img" src="{image_url}" alt="{filename}">
+  <div class="viewer-meta">
+    <div class="viewer-filename">{filename}</div>
+    <div class="viewer-expiry">{expiry_text}</div>
+  </div>
+  <div class="viewer-metrics" id="viewerMetrics"></div>
+  <div class="viewer-error" id="viewerError"></div>
+  <div class="viewer-actions">
+    <a class="btn btn-primary" href="{download_url}" download="{filename}">&#11015; Download</a>
+    <button class="btn" id="copyBtn">&#128203; Copiar URL da imagem</button>
+    <button class="btn btn-danger" id="deleteBtn">&#128465; Excluir</button>
+  </div>
 </div>
-<div class="viewer-actions">
-  <a class="btn btn-primary" href="{download_url}" download="{filename}">&#11015; Download</a>
-  <button class="btn" onclick="navigator.clipboard.writeText('{image_url_abs}').then(()=>this.textContent='&#10003; Copiado!')">&#128203; Copiar URL da imagem</button>
+
+<div class="deleted-card" id="deletedCard">
+  <div class="deleted-title">Arquivo excluido</div>
+  <div class="deleted-sub">Este link nao estara mais disponivel.</div>
+  <a class="btn btn-primary" href="/">Voltar para o TmpUp</a>
 </div>
+
+<script>
+(function(){{
+  const fileId = {file_id_json};
+  const imageUrlAbs = {image_url_abs_json};
+  const copyBtn = document.getElementById('copyBtn');
+  const deleteBtn = document.getElementById('deleteBtn');
+  const metricsEl = document.getElementById('viewerMetrics');
+  const errorEl = document.getElementById('viewerError');
+  let confirming = false;
+
+  copyBtn.addEventListener('click', () => {{
+    navigator.clipboard.writeText(imageUrlAbs).then(() => {{
+      copyBtn.textContent = '✓ Copiado!';
+      setTimeout(() => copyBtn.innerHTML = '&#128203; Copiar URL da imagem', 2000);
+    }});
+  }});
+
+  deleteBtn.addEventListener('click', async () => {{
+    if(!confirming) {{
+      confirming = true;
+      deleteBtn.classList.add('confirm');
+      deleteBtn.textContent = 'Confirmar exclusao?';
+      return;
+    }}
+    try {{
+      const res = await fetch(`/api/files/${{fileId}}`, {{ method: 'DELETE' }});
+      if(res.ok) {{
+        document.getElementById('viewerContent').style.display = 'none';
+        document.getElementById('deletedCard').classList.add('active');
+      }} else {{
+        confirming = false;
+        deleteBtn.classList.remove('confirm');
+        deleteBtn.innerHTML = '&#128465; Excluir';
+        if(errorEl) {{
+          errorEl.textContent = 'Erro ao excluir arquivo';
+          errorEl.style.display = 'block';
+        }}
+      }}
+    }} catch(err) {{
+      confirming = false;
+      deleteBtn.classList.remove('confirm');
+      deleteBtn.innerHTML = '&#128465; Excluir';
+      if(errorEl) {{
+        errorEl.textContent = 'Erro ao excluir arquivo';
+        errorEl.style.display = 'block';
+      }}
+    }}
+  }});
+
+  fetch(`/api/files/${{fileId}}`).then(r => r.ok ? r.json() : null).then(info => {{
+    if(!info) return;
+    const views = info.views || 0;
+    const downloads = info.downloads || 0;
+    metricsEl.innerHTML = `<span>&#128065; ${{views}} visualizacoes</span><span>&#11015; ${{downloads}} downloads</span>`;
+  }});
+}})();
+</script>
 </body>
 </html>"""
 
@@ -1202,17 +1487,21 @@ async def view_file(file_id: str, filename: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
 
-    # For non-images, redirect to raw download
-    if not is_image_file(filename):
-        return RedirectResponse(f"/d/{file_id}/{filename}")
+    # For non-images, redirect to raw download using real metadata.filename
+    if not is_image_file(metadata.filename):
+        return RedirectResponse(f"/d/{file_id}/{metadata.filename}")
 
-    image_url_abs = f"{BASE_URL}/d/{file_id}/{filename}"
+    safe_filename = html.escape(metadata.filename)
+    image_url = html.escape(f"/d/{file_id}/{metadata.filename}", quote=True)
+    download_url = html.escape(f"/d/{file_id}/{metadata.filename}?dl=1", quote=True)
+    image_url_abs = f"{BASE_URL}/d/{file_id}/{metadata.filename}"
 
     return HTMLResponse(VIEWER_TEMPLATE.format(
-        filename=filename,
-        image_url=f"/d/{file_id}/{filename}",
-        download_url=f"/d/{file_id}/{filename}",
-        image_url_abs=image_url_abs,
+        filename=safe_filename,
+        image_url=image_url,
+        download_url=download_url,
+        image_url_abs_json=json.dumps(image_url_abs).replace("</", "<\\/"),
+        file_id_json=json.dumps(file_id).replace("</", "<\\/"),
         expiry_text=format_expiry(metadata.expires_in),
     ))
 
@@ -1281,6 +1570,7 @@ def upload_file(filename: str, content_base64: str, ttl: int = 0) -> dict:
             filename=filename,
             ttl=valid_ttl,
             created_at=time.time(),
+            size_bytes=len(content),
         )
         metadata.save(metadata_path)
 
