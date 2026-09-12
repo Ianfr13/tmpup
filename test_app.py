@@ -2248,3 +2248,63 @@ def test_expiring_soon_count_boundary_condition(auth_client, isolate_data_dir, m
     # Exactly 3600s must NOT be counted in expiring_soon_count (< 3600)
     assert data["expiring_soon_count"] == 1
 
+
+def test_mcp_setup_unauthenticated():
+    client = TestClient(app)
+    # Browser request (Accept: text/html) redirects to /auth/login
+    res_browser = client.get("/mcp-setup", headers={"Accept": "text/html"}, follow_redirects=False)
+    assert res_browser.status_code == 302
+    assert res_browser.headers["location"] == "/auth/login"
+
+    # API client request returns 401
+    res_api = client.get("/mcp-setup")
+    assert res_api.status_code == 401
+    assert res_api.json()["error"] == "unauthorized"
+
+
+def test_mcp_setup_authenticated(auth_client, monkeypatch):
+    secret_key = "super-secret-mcp-key-xyz-987"
+    monkeypatch.setenv("TMPUP_API_KEYS", secret_key)
+    monkeypatch.setattr("app.API_KEYS", {secret_key, "test-key"})
+
+    res = auth_client.get("/mcp-setup")
+    assert res.status_code == 200
+    assert "text/html" in res.headers.get("content-type", "")
+
+    html = res.text
+
+    # 1) Endpoint real: BASE_URL + '/mcp'
+    expected_endpoint = f"{BASE_URL}/mcp"
+    assert expected_endpoint in html
+
+    # 2) 5 tools with names and their docstrings
+    expected_tools = [
+        ("upload_file", "Upload a file encoded in base64 with TTL in seconds (0 = never expires)."),
+        ("list_files", "List active (non-expired) files with metadata."),
+        ("get_file_info", "Get metadata for a specific active file."),
+        ("extend_ttl", "Extend or update TTL for an existing file."),
+        ("delete_file", "Delete a file by ID."),
+    ]
+    for tool_name, tool_desc in expected_tools:
+        assert tool_name in html
+        assert tool_desc in html
+
+    # 3) JSON example with X-API-Key and BASE_URL/mcp
+    assert '"mcpServers"' in html
+    assert '"tmpup"' in html
+    assert '"type": "http"' in html
+    assert "X-API-Key" in html
+    assert "SUA_CHAVE_AQUI" in html
+
+    # 4) Page NEVER contains the real value of TMPUP_API_KEYS
+    assert secret_key not in html
+
+
+def test_mcp_link_in_html_template(auth_client):
+    res = auth_client.get("/")
+    assert res.status_code == 200
+    assert 'href="/mcp-setup"' in res.text
+    assert "MCP" in res.text
+    assert 'href="/mcp-setup"' in HTML_TEMPLATE
+
+
