@@ -19,6 +19,7 @@ from app import (
     HTML_TEMPLATE,
     _download_file,
     _file_meta_dict,
+    _filter_sort_paginate_files,
     _get_file_info,
     _list_active_files,
     _thumbnail_file,
@@ -418,7 +419,16 @@ def test_mcp_upload_file_base64_preserves_cause():
 
 
 def test_mcp_list_files(isolate_data_dir):
-    assert list_files() == []
+    initial = list_files()
+    assert initial == {
+        "items": [],
+        "total": 0,
+        "page": 1,
+        "page_size": 50,
+        "total_pages": 0,
+        "total_size_bytes": 0,
+        "expiring_soon_count": 0,
+    }
 
     mcp_f1 = str(uuid.uuid4())
     meta = FileMetadata(mcp_f1, "f1.txt", 0, time.time())
@@ -426,8 +436,13 @@ def test_mcp_list_files(isolate_data_dir):
     (isolate_data_dir / mcp_f1).write_bytes(b"data1")
 
     files = list_files()
-    assert len(files) == 1
-    assert files[0]["id"] == mcp_f1
+    assert isinstance(files, dict)
+    assert files["total"] == 1
+    assert files["page"] == 1
+    assert files["page_size"] == 50
+    assert files["total_pages"] == 1
+    assert len(files["items"]) == 1
+    assert files["items"][0]["id"] == mcp_f1
 
 
 def test_mcp_get_file_info(isolate_data_dir):
@@ -2103,8 +2118,8 @@ def test_api_files_sort_name_and_size_and_expiry(auth_client, isolate_data_dir):
     assert exp_order == ["Beta.txt", "Zeta.txt", "Alpha.txt"]
 
 
-def test_api_files_aggregates_reflect_full_filtered_set_and_mcp_unaffected(auth_client, isolate_data_dir):
-    """total_size_bytes and expiring_soon_count reflect the full filtered set (>50 items) and MCP tool list_files remains unpaginated."""
+def test_api_files_aggregates_reflect_full_filtered_set_and_mcp_paginated(auth_client, isolate_data_dir):
+    """total_size_bytes and expiring_soon_count reflect the full filtered set (>50 items) and MCP tool list_files returns paginated format."""
     base_time = time.time()
     # Create 60 image files (each 100 bytes):
     # 30 expiring soon (ttl=1800) and 30 never expiring (ttl=0)
@@ -2158,11 +2173,15 @@ def test_api_files_aggregates_reflect_full_filtered_set_and_mcp_unaffected(auth_
     assert data_p2["total_size_bytes"] == 6000
     assert data_p2["expiring_soon_count"] == 30
 
-    # 3. Check MCP list_files() returns full unpaginated list (70 files)
-    mcp_files = list_files()
-    assert isinstance(mcp_files, list)
-    assert len(mcp_files) == 70
-    assert all("id" in f and "filename" in f for f in mcp_files)
+    # 3. Check MCP list_files() returns paginated format (max 50 items)
+    mcp_res = list_files()
+    assert isinstance(mcp_res, dict)
+    assert len(mcp_res["items"]) == 50
+    assert mcp_res["total"] == 70
+    assert mcp_res["page"] == 1
+    assert mcp_res["page_size"] == 50
+    assert mcp_res["total_pages"] == 2
+    assert all("id" in f and "filename" in f for f in mcp_res["items"])
 
 
 def test_html_template_pagination_logic():
@@ -2308,3 +2327,208 @@ def test_mcp_link_in_html_template(auth_client):
     assert 'href="/mcp-setup"' in HTML_TEMPLATE
 
 
+def test_mcp_list_files_paginated_over_50_items(isolate_data_dir):
+    """Calling list_files() without args with >50 active files returns at most 50 items in paginated format."""
+    base_time = time.time()
+    for i in range(55):
+        fid = f"file-{i:03d}"
+        meta = FileMetadata(
+            file_id=fid,
+            filename=f"item_{i:03d}.txt",
+            ttl=0,
+            created_at=base_time + i,
+            size_bytes=10,
+        )
+        meta.save(isolate_data_dir / f"{fid}.meta.json")
+        (isolate_data_dir / fid).write_bytes(b"0123456789")
+
+    res = list_files()
+    assert isinstance(res, dict)
+    assert res["page"] == 1
+    assert res["page_size"] == 50
+    assert res["total"] == 55
+    assert res["total_pages"] == 2
+    assert len(res["items"]) == 50
+    assert res["total_size_bytes"] == 550
+    assert res["expiring_soon_count"] == 0
+
+
+def test_mcp_list_files_search_query(isolate_data_dir):
+    """list_files(q='term') filters by substring in filename before paginating."""
+    base_time = time.time()
+    files = [
+        ("f-1", "report_2024.pdf"),
+        ("f-2", "report_2025.txt"),
+        ("f-3", "notes.doc"),
+    ]
+    for fid, name in files:
+        meta = FileMetadata(file_id=fid, filename=name, ttl=0, created_at=base_time, size_bytes=10)
+        meta.save(isolate_data_dir / f"{fid}.meta.json")
+        (isolate_data_dir / fid).write_bytes(b"x" * 10)
+
+    res_report = list_files(q="report")
+    assert isinstance(res_report, dict)
+    assert res_report["total"] == 2
+    assert len(res_report["items"]) == 2
+    filenames = [f["filename"] for f in res_report["items"]]
+    assert "report_2024.pdf" in filenames
+    assert "report_2025.txt" in filenames
+
+    res_2025 = list_files(q="2025")
+    assert res_2025["total"] == 1
+    assert len(res_2025["items"]) == 1
+    assert res_2025["items"][0]["filename"] == "report_2025.txt"
+
+    res_none = list_files(q="nonexistent")
+    assert res_none["total"] == 0
+    assert res_none["items"] == []
+
+
+def test_mcp_list_files_filter_kind(isolate_data_dir):
+    """list_files(kind='image') only returns image files."""
+    base_time = time.time()
+    files = [
+        ("f-img1", "photo.png"),
+        ("f-img2", "diagram.jpg"),
+        ("f-doc", "doc.txt"),
+        ("f-zip", "archive.zip"),
+    ]
+    for fid, name in files:
+        meta = FileMetadata(file_id=fid, filename=name, ttl=0, created_at=base_time, size_bytes=20)
+        meta.save(isolate_data_dir / f"{fid}.meta.json")
+        (isolate_data_dir / fid).write_bytes(b"y" * 20)
+
+    res_img = list_files(kind="image")
+    assert isinstance(res_img, dict)
+    assert res_img["total"] == 2
+    assert len(res_img["items"]) == 2
+    img_names = {f["filename"] for f in res_img["items"]}
+    assert img_names == {"photo.png", "diagram.jpg"}
+
+    res_doc = list_files(kind="document")
+    assert res_doc["total"] == 1
+    assert res_doc["items"][0]["filename"] == "doc.txt"
+
+
+def test_mcp_list_files_pagination_page_2(isolate_data_dir):
+    """list_files(page=2) returns the next page of results."""
+    base_time = time.time()
+    for i in range(60):
+        fid = f"page-f-{i:03d}"
+        meta = FileMetadata(
+            file_id=fid,
+            filename=f"data_{i:03d}.bin",
+            ttl=0,
+            created_at=base_time + i,
+            size_bytes=5,
+        )
+        meta.save(isolate_data_dir / f"{fid}.meta.json")
+        (isolate_data_dir / fid).write_bytes(b"12345")
+
+    p1 = list_files(page=1)
+    p2 = list_files(page=2)
+
+    assert p1["page"] == 1
+    assert len(p1["items"]) == 50
+    assert p1["total"] == 60
+    assert p1["total_pages"] == 2
+
+    assert p2["page"] == 2
+    assert len(p2["items"]) == 10
+    assert p2["total"] == 60
+    assert p2["total_pages"] == 2
+
+    p1_ids = {f["id"] for f in p1["items"]}
+    p2_ids = {f["id"] for f in p2["items"]}
+    assert p1_ids.isdisjoint(p2_ids)
+    assert len(p1_ids | p2_ids) == 60
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_files_matches_api_list_files(isolate_data_dir):
+    """list_files() and api_list_files() yield identical results for the same parameters."""
+    base_time = time.time()
+    # Create 65 files with different kinds, names, sizes, creation times and ttls
+    for i in range(65):
+        ext = ["png", "txt", "zip", "mp4"][i % 4]
+        fid = f"mix-{i:03d}"
+        meta = FileMetadata(
+            file_id=fid,
+            filename=f"item_{65 - i:03d}.{ext}",
+            ttl=1800 if i % 3 == 0 else 0,
+            created_at=base_time + (i * 10),
+            size_bytes=(i + 1) * 100,
+        )
+        meta.save(isolate_data_dir / f"{fid}.meta.json")
+        (isolate_data_dir / fid).write_bytes(b"x" * 10)
+
+    test_cases = [
+        {},
+        {"page": 2},
+        {"q": "item_01"},
+        {"kind": "image"},
+        {"kind": "document", "page": 1},
+        {"sort": "name"},
+        {"sort": "size"},
+        {"sort": "expiry"},
+        {"sort": "date", "page": 2},
+        {"q": "item", "kind": "archive", "sort": "size", "page": 1},
+    ]
+
+    def _strip_dynamic_fields(res):
+        return {
+            **res,
+            "items": [
+                {k: v for k, v in item.items() if k not in ("expires_in", "last_viewed_at", "last_downloaded_at")}
+                for item in res.get("items", [])
+            ],
+        }
+
+    for kwargs in test_cases:
+        mcp_res = list_files(**kwargs)
+        api_res = await api_list_files(**kwargs)
+        assert _strip_dynamic_fields(mcp_res) == _strip_dynamic_fields(api_res), f"Mismatch for kwargs: {kwargs}"
+
+
+def test_mcp_list_files_docstring():
+    """list_files docstring clarifies q, kind, page, and get_file_info."""
+    doc = list_files.__doc__ or ""
+    assert "(q)" in doc or "q:" in doc
+    assert "kind:" in doc
+    assert "(page" in doc or "page:" in doc
+    assert "get_file_info" in doc
+
+
+def test_filter_sort_paginate_files_unit():
+    """Direct unit tests for _filter_sort_paginate_files function."""
+    files = [
+        {"filename": "a.txt", "size_bytes": 100, "expires_in": 10, "created_at": 1},
+        {"filename": "b.jpg", "size_bytes": 500, "expires_in": -1, "created_at": 2},
+        {"filename": "c.zip", "size_bytes": 200, "expires_in": 5000, "created_at": 3},
+    ]
+
+    # Test empty list
+    res_empty = _filter_sort_paginate_files([])
+    assert res_empty["items"] == []
+    assert res_empty["total"] == 0
+    assert res_empty["total_pages"] == 0
+    assert res_empty["total_size_bytes"] == 0
+    assert res_empty["expiring_soon_count"] == 0
+
+    # Test page clamp (< 1 becomes 1)
+    res_clamp = _filter_sort_paginate_files(files, page=0)
+    assert res_clamp["page"] == 1
+    assert len(res_clamp["items"]) == 3
+
+    # Test kind filter
+    res_kind = _filter_sort_paginate_files(files, kind="image")
+    assert len(res_kind["items"]) == 1
+    assert res_kind["items"][0]["filename"] == "b.jpg"
+
+    # Test sort by size descending
+    res_sort_size = _filter_sort_paginate_files(files, sort="size")
+    assert [f["filename"] for f in res_sort_size["items"]] == ["b.jpg", "c.zip", "a.txt"]
+
+    # Test expiring_soon_count: expires_in between 0 and 3600 (only a.txt has 10s)
+    assert res_sort_size["expiring_soon_count"] == 1
+    assert res_sort_size["total_size_bytes"] == 800
