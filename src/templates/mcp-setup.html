@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Configuracao MCP - TmpUp</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    background:#0f0f0f;color:#e5e5e5;min-height:100vh;
+    display:flex;flex-direction:column;align-items:center;
+    padding:24px 16px;
+  }
+  a{color:#3b82f6}
+  a:hover{color:#60a5fa}
+  h1{font-size:1.8rem;font-weight:700;margin-bottom:4px;color:#fff}
+  .subtitle{color:#737373;font-size:.9rem;margin-bottom:20px}
+  .container{width:100%;max-width:680px;display:flex;flex-direction:column;gap:18px}
+  .card{background:#1a1a1a;border:1px solid #262626;border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:12px}
+  .card h2{font-size:1.05rem;color:#fff;font-weight:600;display:flex;align-items:center;gap:8px}
+  .card p{font-size:.85rem;color:#a3a3a3;line-height:1.5}
+  .card code{background:#141414;border:1px solid #262626;border-radius:4px;padding:2px 6px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;font-size:.85rem;color:#93c5fd}
+  .code-box{display:flex;align-items:center;justify-content:space-between;background:#141414;border:1px solid #262626;border-radius:8px;padding:10px 14px;gap:12px}
+  .code-box code{background:transparent;border:none;padding:0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;font-size:.85rem;color:#93c5fd;word-break:break-all}
+  .code-block{position:relative;background:#141414;border:1px solid #262626;border-radius:8px;padding:14px;overflow-x:auto}
+  .code-block pre{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;font-size:.82rem;color:#e5e5e5;line-height:1.5}
+  .code-header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .btn{background:#262626;border:1px solid #333;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:.85rem;color:#e5e5e5;text-decoration:none;display:inline-flex;align-items:center;gap:6px;transition:all .15s}
+  .btn:hover{background:#333;border-color:#444}
+  .btn-icon{background:#262626;border:1px solid #333;border-radius:8px;padding:6px 12px;cursor:pointer;font-size:.8rem;color:#e5e5e5;transition:all .15s;text-decoration:none;display:inline-flex;align-items:center;gap:6px;flex-shrink:0}
+  .btn-icon:hover{background:#333;border-color:#444}
+  .tool-list{display:flex;flex-direction:column;gap:10px}
+  .tool-item{background:#141414;border:1px solid #262626;border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:4px}
+  .tool-name{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;font-size:.9rem;font-weight:600;color:#60a5fa}
+  .tool-desc{font-size:.82rem;color:#a3a3a3;line-height:1.4}
+  .note{font-size:.8rem;color:#737373;font-style:italic;line-height:1.4}
+</style>
+</head>
+<body>
+
+<div style="position:absolute;top:16px;right:16px;display:flex;align-items:center;gap:10px">
+  <a href="/" style="color:#737373;font-size:.8rem;text-decoration:none;border:1px solid #333;border-radius:6px;padding:4px 10px;transition:all .15s" onmouseover="this.style.color='#e5e5e5'" onmouseout="this.style.color='#737373'">← Voltar</a>
+  <a href="/auth/logout" style="color:#737373;font-size:.8rem;text-decoration:none;border:1px solid #333;border-radius:6px;padding:4px 10px;transition:all .15s" onmouseover="this.style.color='#e5e5e5'" onmouseout="this.style.color='#737373'">Sair</a>
+</div>
+
+<h1>TmpUp</h1>
+<p class="subtitle">Configuracao do Servidor MCP</p>
+
+<div class="container">
+  <!-- 1) Endpoint Real -->
+  <div class="card">
+    <h2>Endpoint MCP</h2>
+    <p>URL base do servidor MCP (Streamable HTTP):</p>
+    <div class="code-box">
+      <code id="endpointCode">{{BASE_URL}}/mcp</code>
+      <button class="btn btn-icon" onclick='copyText(this, {{MCP_URL_JS}})'>&#128203; Copiar</button>
+    </div>
+  </div>
+
+  <!-- 2) Autenticacao -->
+  <div class="card">
+    <h2>Autenticacao</h2>
+    <p>O endpoint MCP em <code>/mcp</code> utiliza autenticacao via cabecalho <code>X-API-Key</code> (o mesmo mecanismo gerenciado pelo <code>AuthMiddleware</code> e <code>verify_api_key</code>).</p>
+    <p>O valor do cabecalho deve ser uma das chaves configuradas na variavel de ambiente <code>TMPUP_API_KEYS</code> no servidor.</p>
+  </div>
+
+  <!-- 3) Exemplo de Configuracao -->
+  <div class="card">
+    <div class="code-header">
+      <h2>Exemplo de Configuracao do Cliente MCP</h2>
+      <button class="btn btn-icon" onclick="copyText(this, document.getElementById('jsonConfigPre').textContent)">&#128203; Copiar JSON</button>
+    </div>
+    <p>Exemplo de configuracao de cliente MCP compativel com transporte HTTP:</p>
+    <div class="code-block">
+      <pre id="jsonConfigPre">{{JSON_CONFIG}}</pre>
+    </div>
+    <div class="note">O nome exato dos campos pode variar um pouco dependendo do cliente MCP usado.</div>
+  </div>
+
+  <!-- 4) Ferramentas MCP -->
+  <div class="card">
+    <h2>Ferramentas MCP Disponiveis</h2>
+    <p>Lista de ferramentas MCP implementadas no servidor:</p>
+    <div class="tool-list">
+      <div class="tool-item">
+        <span class="tool-name">upload_file</span>
+        <span class="tool-desc">Upload a file encoded in base64 with TTL in seconds (0 = never expires).</span>
+      </div>
+      <div class="tool-item">
+        <span class="tool-name">list_files</span>
+        <span class="tool-desc">List active (non-expired) files with metadata.</span>
+      </div>
+      <div class="tool-item">
+        <span class="tool-name">get_file_info</span>
+        <span class="tool-desc">Get metadata for a specific active file.</span>
+      </div>
+      <div class="tool-item">
+        <span class="tool-name">extend_ttl</span>
+        <span class="tool-desc">Extend or update TTL for an existing file.</span>
+      </div>
+      <div class="tool-item">
+        <span class="tool-name">delete_file</span>
+        <span class="tool-desc">Delete a file by ID.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function copyText(btn, text) {
+  const orig = btn.innerHTML;
+  function fallback() {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    btn.textContent = '✓ Copiado!';
+    setTimeout(() => { btn.innerHTML = orig; }, 2000);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = '✓ Copiado!';
+      setTimeout(() => { btn.innerHTML = orig; }, 2000);
+    }).catch(fallback);
+  } else {
+    fallback();
+  }
+}
+</script>
+</body>
+</html>
