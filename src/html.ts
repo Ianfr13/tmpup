@@ -20,5 +20,7 @@ export function unescapeHtml(value: string): string {
 
 /** JSON-encode for embedding inside a script block (Python: json.dumps(x).replace("</", "<\/")). */
 export function jsonForScript(value: unknown): string {
-  return JSON.stringify(value).replaceAll("</", "<\\/");
+  // JSON.stringify returns undefined for undefined/functions/symbols; inside a
+  // script block the JSON literal for those is `null`, not a crash.
+  return (JSON.stringify(value) ?? "null").replaceAll("</", "<\\/");
 }

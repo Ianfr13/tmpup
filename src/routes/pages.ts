@@ -9,12 +9,12 @@ import { renderListPage, renderMcpSetupPage } from "../templates/index.js";
 const HTML_CONTENT_TYPE = "text/html; charset=utf-8";
 
 /** `POST /admin/set-all-infinite`: TTL=0 for every stored file. */
-export function setAllInfinite(): Promise<number> {
+function setAllInfinite(): Promise<number> {
   return setAllFilesInfiniteTtl();
 }
 
 /** Render the MCP setup page exactly like the Python route. */
-export function renderMcpSetup(): string {
+function renderMcpSetup(): string {
   const mcpUrl = `${config.baseUrl}/mcp`;
   const configDict = {
     mcpServers: {

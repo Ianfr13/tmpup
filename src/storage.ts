@@ -175,9 +175,27 @@ export class FileMetadata {
     }
   }
 
-  /** Save metadata to a JSON sidecar file. */
+  /**
+   * Save metadata to a JSON sidecar file.
+   *
+   * Written to a unique temporary file and renamed into place: readers
+   * (listActiveFiles/getFileInfo/the transfer helpers) read sidecars without
+   * taking the lock, so an in-place truncate would let them observe a
+   * half-written file and report a stored file as missing.
+   */
   async save(metadataPath: string): Promise<void> {
-    await fsp.writeFile(metadataPath, JSON.stringify(this.toDict()));
+    const tempPath = `${metadataPath}.tmp-${randomUUID().replace(/-/g, "")}`;
+    try {
+      await fsp.writeFile(tempPath, JSON.stringify(this.toDict()));
+      await fsp.rename(tempPath, metadataPath);
+    } catch (err) {
+      try {
+        await fsp.unlink(tempPath);
+      } catch {
+        // best effort: the temp file may not exist
+      }
+      throw err;
+    }
   }
 }
 
@@ -281,16 +299,37 @@ async function metadataSidecars(dir: string): Promise<string[]> {
   return entries.filter((name) => name.endsWith(".meta.json") && !name.startsWith("."));
 }
 
+/** Run `worker` over `items` with at most `limit` calls in flight. */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index] as T);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
 /** List active (non-expired) files with metadata, newest first. */
 export async function listActiveFiles(): Promise<PublicFileMetadata[]> {
   const dir = dataDirPath();
-  const files: PublicFileMetadata[] = [];
-  for (const entry of await metadataSidecars(dir)) {
+  const entries = await metadataSidecars(dir);
+  // Bounded concurrency: production keeps ~1880 sidecars and the sequential
+  // version paid one round trip per file (read + stat) on every listing.
+  const dicts = await mapWithConcurrency(entries, 32, async (entry) => {
     const metadata = await FileMetadata.fromFile(path.join(dir, entry));
-    if (metadata && !metadata.isExpired) {
-      files.push(await fileMetaDict(metadata));
-    }
-  }
+    return metadata && !metadata.isExpired ? await fileMetaDict(metadata) : null;
+  });
+  const files = dicts.filter((dict): dict is PublicFileMetadata => dict !== null);
   return files.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
 }
 
@@ -428,13 +467,17 @@ export async function cleanupExpiredFiles(): Promise<number> {
     }
 
     try {
-      if (await fileExists(filePath)) {
-        await fsp.unlink(filePath);
-      }
-      if (await fileExists(metadataPath)) {
-        await fsp.unlink(metadataPath);
-      }
-      await deleteThumbnail(fileId);
+      // Same single-writer invariant as the other mutators: a counter save on
+      // the request path must not interleave with this purge.
+      await withMetadataLock(async () => {
+        if (await fileExists(filePath)) {
+          await fsp.unlink(filePath);
+        }
+        if (await fileExists(metadataPath)) {
+          await fsp.unlink(metadataPath);
+        }
+        await deleteThumbnail(fileId);
+      });
       cleaned += 1;
     } catch (err) {
       console.log(`Error cleaning up ${fileId}: ${errorMessage(err)}`);
@@ -545,13 +588,15 @@ export function formatExpiry(expiresIn: number): string {
 
 /** Lowercase extension of `filename` (empty when there is none). */
 function fileExtension(filename: string): string {
-  const dot = filename.lastIndexOf(".");
-  // pathlib's Path(name).suffix is "" for hidden and trailing-dot names
-  // (".env", ".png", "report."), unlike a naive lastIndexOf(".") split.
-  if (dot <= 0 || dot === filename.length - 1) {
+  // pathlib computes the suffix from the final path component only, and a
+  // leading dot is not an extension separator (".env", ".png", "report.").
+  const sepIndex = filename.lastIndexOf("/");
+  const name = sepIndex === -1 ? filename : filename.slice(sepIndex + 1);
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0 || dot === name.length - 1) {
     return "";
   }
-  return filename.slice(dot + 1).toLowerCase();
+  return name.slice(dot + 1).toLowerCase();
 }
 
 /** True when `filename` has a known image extension. */

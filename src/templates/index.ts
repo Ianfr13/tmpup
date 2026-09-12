@@ -28,12 +28,12 @@ export const MCP_SETUP_TEMPLATE: string = load("mcp-setup.html");
  * `vars`. Missing variables throw, like Python's KeyError.
  */
 export function pythonFormat(template: string, vars: Record<string, string>): string {
-  return template.replace(/\{\{|\}\}|\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, name: string | undefined) => {
+  return template.replace(/\{\{|\}\}|\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, name: string) => {
     if (match === "{{") return "{";
     if (match === "}}") return "}";
     // hasOwnProperty: `name in vars` would also match Object.prototype keys.
-    if (name === undefined || !Object.prototype.hasOwnProperty.call(vars, name)) {
-      throw new Error("Missing template variable: " + String(name));
+    if (!Object.prototype.hasOwnProperty.call(vars, name)) {
+      throw new Error("Missing template variable: " + name);
     }
     return vars[name] as string;
   });

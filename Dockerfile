@@ -1,4 +1,6 @@
-# Multi-stage build for a minimal Node 22 runtime image
+# Multi-stage build for a minimal Node 22 runtime image.
+# NOTE: the base tag is floating (no digest), so rebuilds are not bit-reproducible;
+# pin a digest here if the deployment needs reproducibility.
 FROM node:22-slim AS builder
 
 WORKDIR /build
@@ -20,13 +22,14 @@ FROM node:22-slim
 
 WORKDIR /app
 
-COPY --from=builder /build/node_modules ./node_modules
-COPY --from=builder /build/dist ./dist
-COPY package.json ./
+COPY --from=builder --chown=node:node /build/node_modules ./node_modules
+COPY --from=builder --chown=node:node /build/dist ./dist
+COPY --chown=node:node package.json ./
 
-# Create the data directory, make the app readable and run as the
-# unprivileged node user (COPY preserves the source file modes).
-RUN mkdir -p /data && chown -R node:node /data && chmod -R a+rX /app
+# Create the data directory and run as the unprivileged node user. The COPY
+# steps already chown the app tree to node (the repo files are mode 600), so no
+# world-readable chmod is needed.
+RUN mkdir -p /data && chown -R node:node /data
 
 ENV NODE_ENV=production
 ENV PORT=8844

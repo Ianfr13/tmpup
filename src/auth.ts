@@ -248,7 +248,7 @@ export class TimedSerializer {
       throw new BadTimeSignature("Malformed timestamp");
     }
 
-    if (maxAge !== undefined && maxAge !== null) {
+    if (maxAge !== undefined) {
       const age = this.now() - timestamp;
       if (age > maxAge) {
         throw new SignatureExpired(`Signature age ${age} > ${maxAge} seconds`);

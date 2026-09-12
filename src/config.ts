@@ -24,6 +24,8 @@ export interface Config {
   apiKeys: Set<string>;
   /** File listing page size. */
   pageSize: number;
+  /** Maximum size accepted for the small JSON bodies parsed by the routes. */
+  maxJsonBodyBytes: number;
   /** Expired-file cleanup interval in milliseconds. */
   cleanupIntervalMs: number;
 }
@@ -55,7 +57,7 @@ export const config: Config = {
   secretKey: process.env.SECRET_KEY ?? "",
   googleClientId: process.env.GOOGLE_CLIENT_ID ?? "",
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
-  allowedDomain: "douravita.com.br",
+  allowedDomain: process.env.ALLOWED_DOMAIN ?? "douravita.com.br",
   sessionMaxAge: 86400 * 7,
   maxMcpUploadSize: 200 * 1024 * 1024,
   dataDir: process.env.DATA_DIR ?? "/data",
@@ -63,8 +65,28 @@ export const config: Config = {
   httpHost: process.env.HOST ?? "0.0.0.0",
   apiKeys: parseApiKeys(process.env.TMPUP_API_KEYS),
   pageSize: 50,
+  maxJsonBodyBytes: 1024 * 1024,
   cleanupIntervalMs: 60_000,
 };
 
 /** Slug returned for callers authenticated with a valid API key. */
 export const API_KEY_CLIENT = "api-key-client";
+
+/**
+ * Fail-closed check for the process entry point.
+ *
+ * An empty SECRET_KEY would sign every session cookie with a constant,
+ * publicly known key (the salt is part of the format), so anyone could mint a
+ * valid session for any address. app.py silently accepted it; this port
+ * refuses to start instead of running with forgeable sessions.
+ *
+ * @throws {Error} when SECRET_KEY is missing or blank
+ */
+export function assertRuntimeConfig(): void {
+  if (config.secretKey.trim() === "") {
+    throw new Error(
+      "SECRET_KEY is not set: session cookies would be signed with an empty key. " +
+        "Set SECRET_KEY in the environment (reuse the value from the previous deployment).",
+    );
+  }
+}

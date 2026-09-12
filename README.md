@@ -17,7 +17,7 @@ thumbnails e servidor MCP — porta do antigo `app.py` (FastAPI/Python) para **N
 | Variável | Padrão | Descrição |
 |---|---|---|
 | `BASE_URL` | `https://tmpup.douravita.com.br` | Base das URLs públicas (`/d/`, viewer, config MCP) |
-| `SECRET_KEY` | vazio | Chave de assinatura do cookie de sessão. **Mantenha o mesmo valor do serviço Python** para não invalidar as sessões existentes |
+| `SECRET_KEY` | — (**obrigatória**) | Chave de assinatura do cookie de sessão. O processo **recusa iniciar** sem ela (chave vazia = cookie forjável). **Mantenha o mesmo valor do serviço Python** para não invalidar as sessões existentes |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | vazio | OAuth Google (login restrito a `@douravita.com.br`) |
 | `TMPUP_API_KEYS` | vazio | Lista separada por vírgula de chaves `X-API-Key` (clients headless/MCP). Vazio = desabilitado |
 | `DATA_DIR` | `/data` | Diretório dos arquivos e sidecars |

@@ -1710,3 +1710,114 @@ describe("upload body fidelity", () => {
   });
 });
 
+/**
+ * The MCP setup page interpolates config.baseUrl in three places. BASE_URL is
+ * operator-controlled, but a value containing markup must not be able to inject
+ * HTML into the page (app.py interpolated the JSON config raw).
+ */
+describe("mcp-setup page escaping", () => {
+  it("neutralizes markup coming from BASE_URL", async () => {
+    const app = await authServer();
+    const original = config.baseUrl;
+    try {
+      config.baseUrl = "https://evil.example.com/<script>alert(1)</script>";
+      const res = await app.inject({ method: "GET", url: "/mcp-setup", headers: authHeader() });
+      expect(res.statusCode).toBe(200);
+      expect(res.body).not.toContain("<script>alert(1)</script>");
+      expect(res.body).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    } finally {
+      config.baseUrl = original;
+    }
+  });
+
+  it("keeps the copy button attribute intact when BASE_URL contains a quote", async () => {
+    const app = await authServer();
+    const original = config.baseUrl;
+    try {
+      config.baseUrl = "https://evil.example.com/'onmouseover='alert(1)";
+      const res = await app.inject({ method: "GET", url: "/mcp-setup", headers: authHeader() });
+      expect(res.statusCode).toBe(200);
+      // With the apostrophe escaped the attribute still terminates where the
+      // template says it does; without escaping the injected quote would close
+      // it early and this pattern would no longer match.
+      const button = res.body.match(/onclick='copyText\(this, ([^']*\))'/);
+      expect(button).not.toBeNull();
+      expect(button?.[1]).toContain("&#x27;");
+    } finally {
+      config.baseUrl = original;
+    }
+  });
+});
+
+/**
+ * The upload guarantee has to hold on a real socket too: with app.inject() the
+ * body arrives pre-buffered, so only a listen()+fetch() test proves that the
+ * raw Fastify stream is what gets written to disk.
+ */
+describe("upload body fidelity over a real socket", () => {
+  it("stores application/json bytes exactly as sent over HTTP", async () => {
+    const app = await authServer();
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    try {
+      const body = '{\n  "socket": true,\n  "x": [1, 2]\n}\n';
+      const upload = await fetch(address + "/api/upload", {
+        method: "POST",
+        headers: {
+          ...authHeader(),
+          "x-filename": "socket.json",
+          "x-ttl": "3600",
+          "content-type": "application/json",
+        },
+        body,
+      });
+      expect(upload.status).toBe(200);
+      const id = ((await upload.json()) as { id: string }).id;
+
+      const download = await fetch(address + "/d/" + id + "/socket.json");
+      expect(download.status).toBe(200);
+      expect(Buffer.from(await download.arrayBuffer()).toString("utf8")).toBe(body);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+/**
+ * The MCP body limit must answer the client instead of tearing the socket down
+ * mid-stream (Fastify's own bodyLimit no longer applies to streamed bodies).
+ */
+describe("MCP body limit over a real socket", () => {
+  it("answers 413 for an oversized chunked body", async () => {
+    // The route captures the limit when the server is built, so set it first.
+    const originalLimit = config.maxMcpUploadSize;
+    config.maxMcpUploadSize = 512;
+    const app = await authServer();
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    try {
+      // A ReadableStream body has no content-length, so the handler has to hit
+      // its own read limit instead of the cheap header check.
+      const oversized = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("x".repeat(4096)));
+          controller.close();
+        },
+      });
+      const response = await fetch(address + "/mcp", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...authHeader() },
+        body: oversized,
+        // node fetch requires duplex for a streaming request body
+        duplex: "half",
+      });
+      expect(response.status).toBe(413);
+      const payload = (await response.json()) as { error: { code: number } };
+      expect(payload.error.code).toBe(-32000);
+    } finally {
+      config.maxMcpUploadSize = originalLimit;
+      await app.close();
+    }
+  });
+});
+
+
+

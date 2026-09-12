@@ -5,8 +5,7 @@
  * Tool names, parameters, docstrings and error messages are ported 1:1.
  */
 import { randomUUID } from "node:crypto";
-import { unlink, writeFile } from "node:fs/promises";
-import type { IncomingMessage } from "node:http";
+import { writeFile } from "node:fs/promises";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -15,6 +14,7 @@ import { z } from "zod";
 import { config } from "./config.js";
 import { HttpError } from "./errors.js";
 import { filterSortPaginateFiles } from "./files.js";
+import { readLimitedBody, removeIfExists } from "./fsutil.js";
 import { logEvent } from "./logger.js";
 import {
   FileMetadata,
@@ -26,18 +26,18 @@ import {
   validateTtl,
 } from "./storage.js";
 import type { FileListPage, PublicFileMetadata, UploadResult } from "./types.js";
+import { SERVICE_VERSION } from "./version.js";
 
 function maxSizeMessage(): string {
   const megabytes = Math.trunc(config.maxMcpUploadSize / (1024 * 1024));
   return `File exceeds maximum allowed size (${megabytes}MB)`;
 }
 
-async function removeIfExists(target: string): Promise<void> {
-  try {
-    await unlink(target);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
+/** Number of trailing \`=\` padding characters in a base64 string. */
+function base64Padding(value: string): number {
+  if (value.endsWith("==")) return 2;
+  if (value.endsWith("=")) return 1;
+  return 0;
 }
 
 /**
@@ -47,10 +47,6 @@ async function removeIfExists(target: string): Promise<void> {
 export function strictBase64Decode(value: string): Buffer {
   if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) {
     throw new Error("Invalid base64-encoded string");
-  }
-  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
-  if (value.length === padding) {
-    return Buffer.alloc(0);
   }
   return Buffer.from(value, "base64");
 }
@@ -69,7 +65,7 @@ export async function uploadFile(
     throw error;
   }
 
-  const pad = contentBase64.endsWith("==") ? 2 : contentBase64.endsWith("=") ? 1 : 0;
+  const pad = base64Padding(contentBase64);
   const estimatedSize = Math.floor((contentBase64.length * 3) / 4) - pad;
   if (estimatedSize > config.maxMcpUploadSize) {
     const message = maxSizeMessage();
@@ -89,12 +85,6 @@ export async function uploadFile(
   if (content.length === 0) {
     logEvent("mcp_upload_failed", { filename, error: "Empty file" });
     throw new Error("Empty file");
-  }
-
-  if (content.length > config.maxMcpUploadSize) {
-    const message = maxSizeMessage();
-    logEvent("mcp_upload_failed", { filename, error: message });
-    throw new Error(message);
   }
 
   const fileId = randomUUID();
@@ -187,7 +177,7 @@ function asToolResult(value: unknown): {
 }
 
 export function createMcpServer(): McpServer {
-  const server = new McpServer({ name: "TmpUp", version: "2.0.0" });
+  const server = new McpServer({ name: "TmpUp", version: SERVICE_VERSION });
 
   server.registerTool(
     "upload_file",
@@ -253,24 +243,7 @@ export function createMcpServer(): McpServer {
 /** Long-lived instance kept for parity with app.py's module-level `mcp`. */
 export const mcp: McpServer = createMcpServer();
 
-export function isPlainBody(value: unknown): boolean {
-  return typeof value === "object" && value !== null && !Buffer.isBuffer(value);
-}
 
-/** Read a request stream, rejecting as soon as it exceeds `limit` bytes. */
-async function readBodyWithLimit(stream: IncomingMessage, limit: number): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of stream) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
-    total += buffer.length;
-    if (total > limit) {
-      throw new HttpError(413, "Request body too large");
-    }
-    chunks.push(buffer);
-  }
-  return Buffer.concat(chunks);
-}
 
 /**
  * Mount the MCP Streamable HTTP endpoint at /mcp (stateless: one server per
@@ -302,15 +275,21 @@ export async function registerMcpRoutes(app: FastifyInstance): Promise<void> {
     // here: this also bounds the memory the transport would otherwise allocate.
     let parsedBody: unknown;
     try {
-      const raw = await readBodyWithLimit(request.raw, maxBodyBytes);
-      parsedBody = JSON.parse(raw.toString("utf8"));
+      const { data, tooLarge } = await readLimitedBody(request.raw, maxBodyBytes);
+      if (tooLarge) {
+        await reply.code(413).send({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: "Request body too large." },
+          id: null,
+        });
+        return;
+      }
+      parsedBody = JSON.parse(data.toString("utf8"));
     } catch (error) {
-      const status = error instanceof HttpError && error.statusCode === 413 ? 413 : 400;
-      const message =
-        status === 413 ? "Request body too large." : "Parse error: Invalid JSON-RPC message";
-      await reply.code(status).send({
+      console.error("mcp body read failed:", error);
+      await reply.code(400).send({
         jsonrpc: "2.0",
-        error: { code: status === 413 ? -32000 : -32700, message },
+        error: { code: -32700, message: "Parse error: Invalid JSON-RPC message" },
         id: null,
       });
       return;

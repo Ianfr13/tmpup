@@ -10,7 +10,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import { config } from "../config.js";
 import { HttpError } from "../errors.js";
-import { removeIfExists } from "../fsutil.js";
+import { readLimitedBody, removeIfExists } from "../fsutil.js";
 import { filterSortPaginateFiles } from "../files.js";
 import {
   FileMetadata,
@@ -45,19 +45,17 @@ function isReadable(value: unknown): value is Readable {
   );
 }
 
-async function streamToBuffer(stream: Readable): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
-  }
-  return Buffer.concat(chunks);
-}
-
 /** `await request.json()` with FastAPI's 400 `Invalid JSON body` on failure. */
 async function readJsonBody(request: FastifyRequest): Promise<unknown> {
   const body: unknown = request.body;
   if (isReadable(body)) {
-    const text = (await streamToBuffer(body)).toString("utf8");
+    // Bounded read: the catch-all parser leaves Fastify's bodyLimit unused, so
+    // this is the only guard against an oversized JSON body on these routes.
+    const { data, tooLarge } = await readLimitedBody(body, config.maxJsonBodyBytes);
+    if (tooLarge) {
+      throw new HttpError(413, "Request body too large");
+    }
+    const text = data.toString("utf8");
     try {
       return JSON.parse(text);
     } catch {
@@ -68,6 +66,14 @@ async function readJsonBody(request: FastifyRequest): Promise<unknown> {
     throw new HttpError(400, "Invalid JSON body");
   }
   return body;
+}
+
+/**
+ * Fastify's querystring parser returns an array for a repeated key, while
+ * FastAPI's `?q=a&q=b` keeps the first value; normalize to the first.
+ */
+function firstQuery(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
 }
 
 /** Parse a `page` query parameter the way FastAPI's `page: int = 1` does. */
@@ -106,18 +112,22 @@ async function writeRequestBodyTo(body: unknown, filePath: string): Promise<numb
 export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
   app.get("/health", async () => ({ status: "ok" }));
 
-  app.get<{ Querystring: { page?: string; q?: string; kind?: string; sort?: string } }>(
-    "/api/files",
-    async (request) => {
-      const allFiles = await listActiveFiles();
-      return filterSortPaginateFiles(allFiles, {
-        q: request.query.q ?? null,
-        kind: request.query.kind ?? "all",
-        sort: request.query.sort ?? "date",
-        page: parsePage(request.query.page),
-      });
-    },
-  );
+  app.get<{
+    Querystring: {
+      page?: string | string[];
+      q?: string | string[];
+      kind?: string | string[];
+      sort?: string | string[];
+    };
+  }>("/api/files", async (request) => {
+    const allFiles = await listActiveFiles();
+    return filterSortPaginateFiles(allFiles, {
+      q: firstQuery(request.query.q) ?? null,
+      kind: firstQuery(request.query.kind) ?? "all",
+      sort: firstQuery(request.query.sort) ?? "date",
+      page: parsePage(firstQuery(request.query.page)),
+    });
+  });
 
   app.get<{ Params: { file_id: string } }>("/api/files/:file_id", async (request) => {
     const info = await getFileInfo(request.params.file_id);

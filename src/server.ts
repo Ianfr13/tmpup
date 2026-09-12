@@ -41,7 +41,6 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   await app.register(cookie);
 
   app.addHook("onRequest", async (request, reply) => {
-    if (reply.sent) return;
     await authHook(request, reply);
   });
 
@@ -51,13 +50,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof HttpError) {
+      if (error.statusCode >= 500) {
+        console.error("request failed:", error);
+      }
       void reply.code(error.statusCode).send({ detail: error.detail });
-      return;
-    }
-    // FastAPI returns 400 {"detail": "Invalid JSON body"} for malformed JSON
-    // (readJsonBody raises exactly that for the explicit parsing routes).
-    if ((error as { code?: string }).code === "FST_ERR_CTP_INVALID_JSON_BODY") {
-      void reply.code(400).send({ detail: "Invalid JSON body" });
       return;
     }
     const statusCode =

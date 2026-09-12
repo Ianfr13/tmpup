@@ -172,4 +172,47 @@ Adaptações conscientes (documentar no teste): os testes Python que verificam
     FastAPI).
 11. **Templates** ficam em `src/templates/*.html` copiados byte a byte do app.py e são
     carregados no boot; o `npm run build` copia os arquivos para `dist/templates/`.
+12. **`SECRET_KEY` vazio agora impede o boot.** O app.py assinava as sessões com uma
+    chave vazia (cookie forjável, já que o salt do itsdangerous é público). O port
+    chama `assertRuntimeConfig()` no `main.ts` e recusa iniciar sem `SECRET_KEY`
+    — endurecimento deliberado de segurança, não paridade.
+13. **OAuth endurecido (divergência deliberada do app.py).** O fluxo agora envia e
+    valida um nonce `state` (cookie HttpOnly de 10 min, comparação em tempo constante)
+    e exige `email_verified === true` no userinfo. O app.py aceitava qualquer `code`
+    sem correlacionar com o navegador e só checava o sufixo do domínio (login CSRF /
+    e-mail não verificado). O restante do fluxo é idêntico.
+14. **`formatExpiry`** trata `expires_in <= 0` como "Nunca expira", igual ao app.py
+    (um arquivo com menos de 1s de vida também cai nesse ramo).
+15. **Uso de templates sem escape pontual, mantido por paridade**: `list.html`
+    interpola `f.id` (UUID gerado pelo servidor) em `innerHTML`, `login.html`
+    traz o domínio permitido no texto e `mcp-setup.html` repete a lista de tools.
+    Trocar isso quebraria a paridade byte a byte dos templates.
+16. **Tabela de MIME.** A resolução final usa `mime-types`/mime-db, não
+    `mimetypes.types_map` do CPython: os casos comuns e as extensões compostas
+    (`.tar.gz`, `.tgz`, `.tbz2`, `.txz`) estão cobertos por teste, mas tabelas de
+    extensões exóticas podem divergir.
+17. **Upload sem limite de tamanho** (paridade com o app.py, que também streamava sem
+    teto); o MCP mantém o teto de 200MB e as rotas de JSON pequeno têm teto de 1MB.
+18. **Sidecar atômico.** `FileMetadata.save` escreve num arquivo temporário e faz
+    `rename`: leitores sem lock nunca veem um sidecar truncado (o app.py escrevia
+    direto no arquivo de destino).
+19. **Imagem Docker** usa a tag flutuante `node:22-slim` (sem digest): builds não são
+    bit-reprodutíveis entre rebuilds.
+20. **Chamadas ao Google** têm timeout de 10s, checagem de `response.ok` e falha de
+    transporte vira `502` (o app.py deixava estourar como 500).
+21. **Flag `Secure` dos cookies** é derivada do esquema de `BASE_URL`
+    (`https://` → Secure). O app.py marcava `Secure` sempre, o que quebra o login
+    quando o serviço é acessado por HTTP (dev/staging atrás de proxy).
+22. **Query params repetidos** (`?q=a&q=b`, `?dl=1&dl=0`) são normalizados para o
+    primeiro valor, como o FastAPI fazia; sem isso o parser do Fastify entrega um
+    array e o handler quebrava.
+23. **Redirect do viewer** percent-encoda a `Location` como o `RedirectResponse` do
+    Starlette (`quote` com `safe=":/%#?=@[]!$&'()*+,;"`), preservando nomes com
+    acento/espaço.
+24. **Sem `bodyLimit` global.** Os corpos chegam como stream (necessário para o
+    upload byte a byte), então o limite do Fastify não se aplica: `PATCH .../ttl`
+    limita em 1MB, `/mcp` em 1,5× o teto do MCP e o upload continua sem teto (igual
+    ao app.py). Corpos acima do limite são drenados antes do 413 para não derrubar o
+    socket no meio da requisição.
+
 

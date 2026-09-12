@@ -1,15 +1,27 @@
 /** Process entry point: startup tasks + HTTP listener. */
-import { config } from "./config.js";
+import { assertRuntimeConfig, config } from "./config.js";
 import { runStartupTasks } from "./lifecycle.js";
 import { buildServer } from "./server.js";
+
+assertRuntimeConfig();
 
 const stopCleanup = await runStartupTasks();
 const app = await buildServer({ logger: true });
 
+let shuttingDown = false;
+
 async function shutdown(signal: string): Promise<void> {
+  // A second SIGINT/SIGTERM (Ctrl-C twice, docker stop retry, orchestrator
+  // escalation) must not re-enter close() while the first one is pending.
+  if (shuttingDown) return;
+  shuttingDown = true;
   app.log.info({ signal }, "shutting down");
   stopCleanup();
-  await app.close();
+  try {
+    await app.close();
+  } catch (error) {
+    app.log.error({ error }, "error during shutdown");
+  }
   process.exit(0);
 }
 

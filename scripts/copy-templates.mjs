@@ -10,7 +10,7 @@ const targetDir = path.join(root, "dist", "templates");
 await mkdir(targetDir, { recursive: true });
 let copied = 0;
 for (const entry of await readdir(sourceDir)) {
-  if (entry.endsWith(".html")) {
+  if (entry.toLowerCase().endsWith(".html")) {
     await copyFile(path.join(sourceDir, entry), path.join(targetDir, entry));
     copied += 1;
   }

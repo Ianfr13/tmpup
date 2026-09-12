@@ -3,7 +3,8 @@ import { config } from "./config.js";
 import { logEvent } from "./logger.js";
 import { cleanupExpiredFiles, ensureDataDir, setAllFilesInfiniteTtl } from "./storage.js";
 
-/** One-time migration performed on boot: every existing file becomes TTL=0. */
+/** Boot migration (app.py startup_event): every existing file becomes TTL=0.
+ * It runs on every boot, but only rewrites sidecars whose ttl is not already 0. */
 export async function migrateAllToInfiniteTtl(): Promise<number> {
   await ensureDataDir();
   const migrated = await setAllFilesInfiniteTtl();
@@ -36,7 +37,6 @@ export function startCleanupLoop(): () => void {
 
 /** Everything app.py did in its startup event. */
 export async function runStartupTasks(): Promise<() => void> {
-  await ensureDataDir();
   await migrateAllToInfiniteTtl();
   const stop = startCleanupLoop();
   console.log(`TmpUp started - data directory: ${config.dataDir}`);

@@ -33,9 +33,18 @@ export async function buildTestServer(): Promise<FastifyInstance> {
   return buildServer();
 }
 
-/** Remove a temporary data dir created by {@link makeDataDir}. */
+/**
+ * Remove a data dir created by {@link makeDataDir}: its `<mkdtemp>/data`
+ * parent is what `mkdtemp` created, so that is what gets deleted. A path that
+ * does not follow the convention is removed directly instead of deleting an
+ * unrelated parent directory.
+ */
 export async function removeDataDir(dataDir: string): Promise<void> {
-  await rm(path.dirname(dataDir), { recursive: true, force: true });
+  const parent = path.dirname(dataDir);
+  const target = path.basename(dataDir) === "data" && path.basename(parent).startsWith("tmpup-test-")
+    ? parent
+    : dataDir;
+  await rm(target, { recursive: true, force: true });
 }
 
 /** API key used by the ported `auth_client` fixture. */

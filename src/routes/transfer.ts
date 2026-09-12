@@ -89,8 +89,12 @@ async function resolveStoredFile(
   }
 
   if (metadata.isExpired) {
-    await removeIfExists(filePath);
-    await removeIfExists(metadataPath);
+    // Purge under the metadata lock (same invariant as deleteFileById) so a
+    // concurrent counter save cannot recreate the sidecar we are removing.
+    await withMetadataLock(async () => {
+      await removeIfExists(filePath);
+      await removeIfExists(metadataPath);
+    });
     await deleteThumbnail(metadata.fileId);
     throw new HttpError(404, "File expired");
   }
@@ -154,7 +158,13 @@ export async function viewFile(
   const { metadata } = await resolveStoredFile(fileId);
 
   if (!isImageFile(metadata.filename)) {
-    return { statusCode: 307, location: `/d/${fileId}/${metadata.filename}` };
+    // Starlette's RedirectResponse quotes the URL before writing the header
+    // (urllib's quote with this safe set), so non-ASCII/spaced names are
+    // encoded exactly like app.py did.
+    return {
+      statusCode: 307,
+      location: pythonQuote(`/d/${fileId}/${metadata.filename}`, ":/%#?=@[]!$&'()*+,;"),
+    };
   }
 
   const safeFilename = escapeHtml(metadata.filename);
@@ -216,17 +226,16 @@ async function streamFile(reply: FastifyReply, descriptor: FileResponseDescripto
 }
 
 export async function registerTransferRoutes(app: FastifyInstance): Promise<void> {
-  app.get<{ Params: { file_id: string; filename: string }; Querystring: { dl?: string } }>(
-    "/d/:file_id/:filename",
-    async (request, reply) => {
-      const result = await downloadFile(
-        request.params.file_id,
-        request.params.filename,
-        request.query.dl ?? null,
-      );
-      return streamFile(reply, result);
-    },
-  );
+  app.get<{
+    Params: { file_id: string; filename: string };
+    Querystring: { dl?: string | string[] };
+  }>("/d/:file_id/:filename", async (request, reply) => {
+    // A repeated ?dl=1&dl=0 reaches the handler as an array; FastAPI kept the
+    // first value, so normalize instead of crashing on .toLowerCase().
+    const dl = Array.isArray(request.query.dl) ? (request.query.dl[0] ?? null) : (request.query.dl ?? null);
+    const result = await downloadFile(request.params.file_id, request.params.filename, dl);
+    return streamFile(reply, result);
+  });
 
   app.get<{ Params: { file_id: string; filename: string } }>(
     "/v/:file_id/:filename",
