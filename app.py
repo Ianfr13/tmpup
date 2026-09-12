@@ -1232,16 +1232,14 @@ async def health_check():
 PAGE_SIZE = 50
 
 
-@app.get("/api/files")
-async def api_list_files(
-    page: int = 1,
+def _filter_sort_paginate_files(
+    all_files: list[dict],
     q: Optional[str] = None,
     kind: str = "all",
     sort: str = "date",
-):
-    """List active (non-expired) files with metadata, filtered and paginated."""
-    all_files = await run_in_threadpool(_list_active_files)
-
+    page: int = 1,
+) -> dict:
+    """Filter, sort, and paginate a list of active file metadata dictionaries."""
     items = list(all_files)
     target_kind = (kind or "all").strip().lower()
     if target_kind != "all":
@@ -1281,6 +1279,18 @@ async def api_list_files(
         "total_size_bytes": total_size_bytes,
         "expiring_soon_count": expiring_soon_count,
     }
+
+
+@app.get("/api/files")
+async def api_list_files(
+    page: int = 1,
+    q: Optional[str] = None,
+    kind: str = "all",
+    sort: str = "date",
+):
+    """List active (non-expired) files with metadata, filtered and paginated."""
+    all_files = await run_in_threadpool(_list_active_files)
+    return _filter_sort_paginate_files(all_files, q=q, kind=kind, sort=sort, page=page)
 
 
 @app.get("/api/files/{file_id}")
@@ -2043,9 +2053,20 @@ def upload_file(filename: str, content_base64: str, ttl: int = 0) -> dict:
 
 
 @mcp.tool()
-def list_files() -> list[dict]:
-    """List active (non-expired) files with metadata."""
-    return _list_active_files()
+def list_files(
+    q: Optional[str] = None,
+    kind: str = "all",
+    sort: str = "date",
+    page: int = 1,
+) -> dict:
+    """List active (non-expired) files with metadata, filtered and paginated.
+
+    Supports search by name/substring (q), filter by file type (kind: all/image/document/video/archive),
+    sorting (sort: date/name/size/expiry), and pagination (page, returns up to 50 items per page).
+    To look up a specific file by its unique ID, use the separate get_file_info(file_id) tool.
+    """
+    all_files = _list_active_files()
+    return _filter_sort_paginate_files(all_files, q=q, kind=kind, sort=sort, page=page)
 
 
 @mcp.tool()
