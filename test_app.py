@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import re
 import time
 import uuid
 import pytest
@@ -741,7 +742,42 @@ def test_file_meta_dict_helper():
         "is_image": False,
         "expires_in": meta.expires_in,
         "created_at": now,
+        "size_bytes": 0,
+        "views": 0,
+        "downloads": 0,
+        "last_viewed_at": None,
+        "last_downloaded_at": None,
     }
+
+
+def test_file_meta_dict_real_file_size_and_metrics(isolate_data_dir):
+    """_file_meta_dict returns correct size_bytes from disk and metrics fields, with 0 on FileNotFoundError."""
+    file_id = str(uuid.uuid4())
+    content = b"x" * 1234
+    (isolate_data_dir / file_id).write_bytes(content)
+    now = time.time()
+    meta = FileMetadata(
+        file_id=file_id,
+        filename="report.pdf",
+        ttl=3600,
+        created_at=now,
+        views=4,
+        downloads=2,
+        last_viewed_at=now - 50,
+        last_downloaded_at=now - 10,
+    )
+    meta_dict = _file_meta_dict(meta)
+    assert meta_dict["size_bytes"] == 1234
+    assert meta_dict["views"] == 4
+    assert meta_dict["downloads"] == 2
+    assert meta_dict["last_viewed_at"] == now - 50
+    assert meta_dict["last_downloaded_at"] == now - 10
+
+    # If file is missing on disk, size_bytes must be 0 without raising FileNotFoundError
+    (isolate_data_dir / file_id).unlink()
+    missing_dict = _file_meta_dict(meta)
+    assert missing_dict["size_bytes"] == 0
+
 
 
 def test_validate_ttl_boundary_and_simplified_check():
@@ -788,3 +824,400 @@ def test_mcp_upload_file_rejects_payload_exceeding_size_limit(isolate_data_dir, 
     allowed_b64 = base64.b64encode(allowed_data).decode()
     res = upload_file("allowed.bin", allowed_b64, ttl=0)
     assert "id" in res
+
+
+def test_file_metadata_defaults_and_backwards_compatibility():
+    """FileMetadata initializes new fields with defaults, to_dict includes them, and from_dict supports legacy dicts without them."""
+    now = 1000.0
+    meta = FileMetadata("id1", "file.txt", 3600, now)
+    assert meta.views == 0
+    assert meta.downloads == 0
+    assert meta.last_viewed_at is None
+    assert meta.last_downloaded_at is None
+    assert meta.size_bytes == 0
+    assert meta.to_dict() == {
+        "file_id": "id1",
+        "filename": "file.txt",
+        "ttl": 3600,
+        "created_at": now,
+        "views": 0,
+        "downloads": 0,
+        "last_viewed_at": None,
+        "last_downloaded_at": None,
+        "size_bytes": 0,
+    }
+
+    legacy_data = {
+        "file_id": "old-id",
+        "filename": "old.txt",
+        "ttl": 1800,
+        "created_at": 500.0,
+    }
+    meta_legacy = FileMetadata.from_dict(legacy_data)
+    assert meta_legacy.file_id == "old-id"
+    assert meta_legacy.filename == "old.txt"
+    assert meta_legacy.ttl == 1800
+    assert meta_legacy.created_at == 500.0
+    assert meta_legacy.views == 0
+    assert meta_legacy.downloads == 0
+    assert meta_legacy.last_viewed_at is None
+    assert meta_legacy.last_downloaded_at is None
+    assert meta_legacy.size_bytes == 0
+
+    full_data = {
+        "file_id": "id2",
+        "filename": "new.txt",
+        "ttl": 1800,
+        "created_at": 500.0,
+        "views": 5,
+        "downloads": 3,
+        "last_viewed_at": 600.0,
+        "last_downloaded_at": 700.0,
+        "size_bytes": 2048,
+    }
+    meta_full = FileMetadata.from_dict(full_data)
+    assert meta_full.views == 5
+    assert meta_full.downloads == 3
+    assert meta_full.last_viewed_at == 600.0
+    assert meta_full.last_downloaded_at == 700.0
+    assert meta_full.size_bytes == 2048
+    assert meta_full.to_dict() == full_data
+
+
+def test_rest_endpoints_return_new_metadata_fields(auth_client, isolate_data_dir):
+    """GET /api/files and GET /api/files/{id} return all new metadata fields alongside existing fields."""
+    file_id = str(uuid.uuid4())
+    content = b"sample content for testing"
+    (isolate_data_dir / file_id).write_bytes(content)
+    now = time.time()
+    meta = FileMetadata(
+        file_id=file_id,
+        filename="notes.txt",
+        ttl=3600,
+        created_at=now,
+        views=3,
+        downloads=7,
+        last_viewed_at=now - 40,
+        last_downloaded_at=now - 20,
+    )
+    meta.save(isolate_data_dir / f"{file_id}.meta.json")
+
+    # 1. GET /api/files/{id}
+    res = auth_client.get(f"/api/files/{file_id}")
+    assert res.status_code == 200
+    data = res.json()
+    expected_fields = {
+        "id", "filename", "url", "view_url", "is_image", "expires_in", "created_at",
+        "size_bytes", "views", "downloads", "last_viewed_at", "last_downloaded_at"
+    }
+    assert expected_fields.issubset(data.keys())
+    assert data["id"] == file_id
+    assert data["filename"] == "notes.txt"
+    assert data["size_bytes"] == len(content)
+    assert data["views"] == 3
+    assert data["downloads"] == 7
+    assert data["last_viewed_at"] == now - 40
+    assert data["last_downloaded_at"] == now - 20
+
+    # 2. GET /api/files
+    res_list = auth_client.get("/api/files")
+    assert res_list.status_code == 200
+    files = res_list.json()
+    item = next(f for f in files if f["id"] == file_id)
+    assert expected_fields.issubset(item.keys())
+    assert item["size_bytes"] == len(content)
+    assert item["views"] == 3
+    assert item["downloads"] == 7
+    assert item["last_viewed_at"] == now - 40
+    assert item["last_downloaded_at"] == now - 20
+
+
+def test_download_file_tracks_views_and_downloads(auth_client, isolate_data_dir):
+    """GET /d/... with inline Content-Disposition increments views and sets last_viewed_at; with attachment increments downloads and sets last_downloaded_at."""
+    # 1. Inline file (image/png)
+    img_id = str(uuid.uuid4())
+    img_meta = FileMetadata(img_id, "test.png", 3600, time.time())
+    img_meta_path = isolate_data_dir / f"{img_id}.meta.json"
+    img_meta.save(img_meta_path)
+    (isolate_data_dir / img_id).write_bytes(b"\x89PNG\r\n\x1a\nfake-png")
+
+    t_before_view = time.time()
+    res1 = auth_client.get(f"/d/{img_id}/test.png")
+    assert res1.status_code == 200
+    assert res1.headers.get("content-disposition") == "inline"
+
+    reloaded_img = FileMetadata.from_file(img_meta_path)
+    assert reloaded_img.views == 1
+    assert reloaded_img.downloads == 0
+    assert reloaded_img.last_viewed_at is not None
+    assert reloaded_img.last_viewed_at >= t_before_view
+    assert reloaded_img.last_downloaded_at is None
+
+    # Call again to verify idempotent counting (each call increments once)
+    res2 = auth_client.get(f"/d/{img_id}/test.png")
+    assert res2.status_code == 200
+    reloaded_img2 = FileMetadata.from_file(img_meta_path)
+    assert reloaded_img2.views == 2
+    assert reloaded_img2.downloads == 0
+
+    # 2. Attachment file (application/octet-stream or application/zip)
+    bin_id = str(uuid.uuid4())
+    bin_meta = FileMetadata(bin_id, "archive.zip", 3600, time.time())
+    bin_meta_path = isolate_data_dir / f"{bin_id}.meta.json"
+    bin_meta.save(bin_meta_path)
+    (isolate_data_dir / bin_id).write_bytes(b"PK\x03\x04fake-zip")
+
+    t_before_dl = time.time()
+    res_dl1 = auth_client.get(f"/d/{bin_id}/archive.zip")
+    assert res_dl1.status_code == 200
+    assert res_dl1.headers.get("content-disposition", "").startswith("attachment")
+
+    reloaded_bin = FileMetadata.from_file(bin_meta_path)
+    assert reloaded_bin.downloads == 1
+    assert reloaded_bin.views == 0
+    assert reloaded_bin.last_downloaded_at is not None
+    assert reloaded_bin.last_downloaded_at >= t_before_dl
+    assert reloaded_bin.last_viewed_at is None
+
+    # Call again: increments downloads to 2
+    res_dl2 = auth_client.get(f"/d/{bin_id}/archive.zip")
+    assert res_dl2.status_code == 200
+    reloaded_bin2 = FileMetadata.from_file(bin_meta_path)
+    assert reloaded_bin2.downloads == 2
+    assert reloaded_bin2.views == 0
+
+
+def test_viewer_page_redesign(auth_client, isolate_data_dir):
+    """Viewer page includes new elements (viewerMetrics, deleteBtn, deletedCard) and correctly serialized JS fileId and imageUrlAbs."""
+    img_id = str(uuid.uuid4())
+    img_meta = FileMetadata(img_id, "test_pic.png", 3600, time.time())
+    img_meta.save(isolate_data_dir / f"{img_id}.meta.json")
+    (isolate_data_dir / img_id).write_bytes(b"\x89PNG\r\n\x1a\ncontent")
+
+    res = auth_client.get(f"/v/{img_id}/test_pic.png")
+    assert res.status_code == 200
+    html = res.text
+    assert '<div class="viewer-metrics" id="viewerMetrics"></div>' in html
+    assert 'id="deleteBtn"' in html
+    assert 'id="deletedCard"' in html
+    assert f'const fileId = "{img_id}";' in html
+    assert f'const imageUrlAbs = "{BASE_URL}/d/{img_id}/test_pic.png";' in html
+
+
+def test_main_page_redesign(auth_client):
+    """Main page HTML contains redesigned components: summary bar, search input, filter chips, sort select, bulk action bar, inline renewal, and paste handler."""
+    res = auth_client.get("/")
+    assert res.status_code == 200
+    html = res.text
+    assert 'id="summaryBar"' in html
+    assert 'id="searchInput"' in html
+    assert 'id="chipRow"' in html
+    assert 'id="sortSelect"' in html
+    assert 'id="bulkBar"' in html
+    assert 'id="bulkRenewBtn"' in html
+    assert 'id="bulkDeleteBtn"' in html
+    assert 'id="bulkCancelBtn"' in html
+    assert 'data-action="renew-toggle"' in html
+    assert 'data-action="renew-apply"' in html
+    assert 'data-action="delete"' in html
+    assert 'data-action="select"' in html
+    assert "print-colado" in html
+
+
+def test_security_xss_and_metadata_filename_in_viewer_and_download(auth_client, isolate_data_dir):
+    """Confirm XSS prevention in viewer (HTML escape and JSON </ escaping) and that real metadata.filename is used instead of URL segment."""
+    img_id = str(uuid.uuid4())
+    malicious_filename = "evil</script><script>alert(1)</script>.png"
+    meta = FileMetadata(img_id, malicious_filename, 3600, time.time())
+    meta_path = isolate_data_dir / f"{img_id}.meta.json"
+    meta.save(meta_path)
+    (isolate_data_dir / img_id).write_bytes(b"\x89PNG\r\n\x1a\nfake-png")
+
+    # 1. Access with a completely different URL path
+    res = auth_client.get(f"/v/{img_id}/qualquer-coisa.png")
+    assert res.status_code == 200
+    html = res.text
+
+    # Must display the real metadata.filename, NOT 'qualquer-coisa.png'
+    assert "qualquer-coisa.png" not in html
+    # Must have escaped HTML filename, not raw unescaped tags
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;.png" in html
+    assert "<script>alert(1)</script>" not in html
+
+    # Inside <script> blocks, there must be NO raw '</script>'
+    # Extract the script content or check for raw '</script>' before the real closing tag
+    assert "</script><script>" not in html
+    assert r"<\/" in html or r"\/" in html
+
+    # 2. Reflected XSS attempt via URL path on valid file
+    valid_id = str(uuid.uuid4())
+    valid_meta = FileMetadata(valid_id, "safe_image.png", 3600, time.time())
+    valid_meta.save(isolate_data_dir / f"{valid_id}.meta.json")
+    (isolate_data_dir / valid_id).write_bytes(b"\x89PNG\r\n\x1a\nfake-png")
+
+    attack_url_name = "x%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E.png"
+    res_xss = auth_client.get(f"/v/{valid_id}/{attack_url_name}")
+    assert res_xss.status_code == 200
+    assert "safe_image.png" in res_xss.text
+    assert "onerror=alert(1)" not in res_xss.text
+    assert "<img src=x" not in res_xss.text
+
+    # 3. Content-Disposition in /d/ must use metadata.filename, not URL segment
+    res_d = auth_client.get(f"/d/{valid_id}/injected_name.bin?dl=1")
+    assert res_d.status_code == 200
+    cd = res_d.headers.get("content-disposition", "")
+    assert "safe_image.png" in cd
+    assert "injected_name.bin" not in cd
+
+
+def test_download_dl_param_forces_attachment_and_increments_downloads(auth_client, isolate_data_dir):
+    """GET /d/... with ?dl=1 forces attachment and increments downloads even for inline types."""
+    img_id = str(uuid.uuid4())
+    meta = FileMetadata(img_id, "photo.png", 3600, time.time())
+    meta_path = isolate_data_dir / f"{img_id}.meta.json"
+    meta.save(meta_path)
+    (isolate_data_dir / img_id).write_bytes(b"\x89PNG\r\n\x1a\nfake-png")
+
+    # 1. Normal GET without dl: inline, views=1, downloads=0
+    res_view = auth_client.get(f"/d/{img_id}/photo.png")
+    assert res_view.status_code == 200
+    assert res_view.headers.get("content-disposition") == "inline"
+    reloaded = FileMetadata.from_file(meta_path)
+    assert reloaded.views == 1
+    assert reloaded.downloads == 0
+
+    # 2. GET with ?dl=1: attachment, views=1, downloads=1
+    res_dl = auth_client.get(f"/d/{img_id}/photo.png?dl=1")
+    assert res_dl.status_code == 200
+    assert res_dl.headers.get("content-disposition", "").startswith("attachment")
+    assert "photo.png" in res_dl.headers.get("content-disposition", "")
+    reloaded = FileMetadata.from_file(meta_path)
+    assert reloaded.views == 1
+    assert reloaded.downloads == 1
+
+
+def test_upload_and_viewer_security_xss_e2e(auth_client, isolate_data_dir):
+    """AC 1 & 2: Upload file with X-Filename evil<script>alert(1)</script>.png and confirm GET /v/{id}/{qualquer-coisa.png} returns real metadata.filename escaped, no raw tags, no unescaped </script> in script blocks, and Content-Disposition in /d/ uses metadata.filename."""
+    from urllib.parse import quote
+    malicious_filename = "evil</script><script>alert(1)</script>.png"
+    encoded_name = quote(malicious_filename)
+    payload = b"\x89PNG\r\n\x1a\nmalicious-test-content"
+
+    upload_res = auth_client.post(
+        "/api/upload",
+        headers={"X-Filename": encoded_name, "X-TTL": "3600"},
+        content=payload,
+    )
+    assert upload_res.status_code == 200
+    file_id = upload_res.json()["id"]
+
+    # Verify size_bytes persisted
+    meta_path = isolate_data_dir / f"{file_id}.meta.json"
+    saved_meta = FileMetadata.from_file(meta_path)
+    assert saved_meta.size_bytes == len(payload)
+
+    # 1. GET /v/{file_id}/qualquer-coisa.png
+    viewer_res = auth_client.get(f"/v/{file_id}/qualquer-coisa.png")
+    assert viewer_res.status_code == 200
+    html = viewer_res.text
+
+    # Path from URL must be ignored for display
+    assert "qualquer-coisa.png" not in html
+    # Real name must be escaped in HTML context
+    assert "evil&lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;.png" in html
+    assert "<script>alert(1)</script>" not in html
+
+    # Inside <script> block, </script> must be escaped as <\/script>
+    script_blocks = re.findall(r"<script>(.*?)</script>", html, flags=re.DOTALL)
+    assert len(script_blocks) == 1
+    script_content = script_blocks[0]
+    assert "</script>" not in script_content
+    assert r"<\/" in script_content
+
+    # 2. Content-Disposition in /d/ must use metadata.filename
+    d_res = auth_client.get(f"/d/{file_id}/arbitrary_name.png?dl=1")
+    assert d_res.status_code == 200
+    cd = d_res.headers.get("content-disposition", "")
+    assert "evil" in cd
+    assert "arbitrary_name.png" not in cd
+
+
+def test_metadata_size_bytes_persistence_and_stat_fallback(auth_client, isolate_data_dir):
+    """AC 5: size_bytes is persisted on upload and MCP upload_file; _file_meta_dict uses metadata.size_bytes when > 0 and falls back to stat() when 0/missing."""
+    # 1. Upload via stream persists size_bytes
+    payload = b"hello world 12345"
+    up_res = auth_client.post(
+        "/api/upload",
+        headers={"X-Filename": "stream_file.txt", "X-TTL": "3600"},
+        content=payload,
+    )
+    assert up_res.status_code == 200
+    fid = up_res.json()["id"]
+
+    meta_stream = FileMetadata.from_file(isolate_data_dir / f"{fid}.meta.json")
+    assert meta_stream.size_bytes == len(payload)
+
+    # 2. MCP upload_file persists size_bytes
+    mcp_res = upload_file("mcp_test.txt", base64.b64encode(b"mcp content bytes").decode(), ttl=3600)
+    mcp_fid = mcp_res["id"]
+    meta_mcp = FileMetadata.from_file(isolate_data_dir / f"{mcp_fid}.meta.json")
+    assert meta_mcp.size_bytes == len(b"mcp content bytes")
+
+    # 3. _file_meta_dict uses metadata.size_bytes when > 0 without needing stat()
+    fake_id = str(uuid.uuid4())
+    fake_meta = FileMetadata(fake_id, "fake.txt", 3600, time.time(), size_bytes=999999)
+    # Note: no file written to disk for fake_id!
+    info = _file_meta_dict(fake_meta)
+    assert info["size_bytes"] == 999999
+
+    # 4. _file_meta_dict falls back to stat() when size_bytes is 0 (legacy metadata)
+    legacy_id = str(uuid.uuid4())
+    (isolate_data_dir / legacy_id).write_bytes(b"legacy bytes on disk")
+    legacy_meta = FileMetadata(legacy_id, "legacy.txt", 3600, time.time(), size_bytes=0)
+    info_legacy = _file_meta_dict(legacy_meta)
+    assert info_legacy["size_bytes"] == len(b"legacy bytes on disk")
+
+
+def test_frontend_review_fixes_elements_and_handlers(auth_client, isolate_data_dir):
+    """AC 3, 4, 6, 7, 8: Viewer error element, dl=1 on viewer download, for='ttlSelect', loadFiles validation, bulk action failure handling."""
+    # Main page checks
+    main_res = auth_client.get("/")
+    assert main_res.status_code == 200
+    main_html = main_res.text
+
+    # AC 7: <label for='ttlSelect'>
+    assert '<label for="ttlSelect">' in main_html
+
+    # AC 8: loadFiles checks res.ok and Array.isArray
+    assert "if(!res.ok)" in main_html or "if (!res.ok)" in main_html
+    assert "Array.isArray(data)" in main_html
+
+    # AC 4: bulk actions check response.ok and count actual successes/failures
+    assert "successCount" in main_html
+    assert "${successCount} de ${ids.length} arquivo(s) excluidos" in main_html
+    assert "${successCount} de ${ids.length} arquivo(s) renovados" in main_html
+
+    # Viewer page checks
+    img_id = str(uuid.uuid4())
+    img_meta = FileMetadata(img_id, "view_test.png", 3600, time.time())
+    img_meta.save(isolate_data_dir / f"{img_id}.meta.json")
+    (isolate_data_dir / img_id).write_bytes(b"\x89PNG\r\n\x1a\ncontent")
+
+    viewer_res = auth_client.get(f"/v/{img_id}/view_test.png")
+    assert viewer_res.status_code == 200
+    viewer_html = viewer_res.text
+
+    # AC 3: Viewer download button has ?dl=1
+    assert f'href="/d/{img_id}/view_test.png?dl=1"' in viewer_html
+    assert 'download="view_test.png"' in viewer_html
+
+    # AC 6: Viewer has error element and error feedback on delete failure
+    assert 'id="viewerError"' in viewer_html
+    assert "Erro ao excluir arquivo" in viewer_html
+
+
+
+
+
+
+
