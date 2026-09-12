@@ -9,11 +9,12 @@ import html
 import json
 import mimetypes
 import os
+import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Optional
-from urllib.parse import unquote, urlencode
+from urllib.parse import quote as urlquote, unquote, urlencode
 
 import httpx
 from fastapi import FastAPI, Request, Response, HTTPException
@@ -35,6 +36,12 @@ GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 ALLOWED_DOMAIN = "douravita.com.br"
 SESSION_MAX_AGE = 86400 * 7  # 7 days
 MAX_MCP_UPLOAD_SIZE = 200 * 1024 * 1024  # 200MB limit for MCP upload tool
+
+# ponytail: single global lock, not per-file -- writes are rare/fast (TTL
+# renew, view/download counters), so contention is a non-issue. Guards the
+# read-modify-write of an existing file's metadata sidecar now that routes
+# run concurrently via run_in_threadpool.
+_metadata_lock = threading.Lock()
 
 # API-key auth alternativa pra clients headless (pipeline UGC, scripts, CI).
 # Comma-separated lista de chaves válidas em TMPUP_API_KEYS.
@@ -935,15 +942,15 @@ def extend_file_ttl(file_id: str, ttl: int) -> Optional[dict]:
         log_event("extend_ttl_failed", file_id=file_id, reason="not_found")
         return None
 
-    metadata = FileMetadata.from_file(metadata_path)
-    if not metadata or metadata.is_expired or not file_path.exists():
-        log_event("extend_ttl_failed", file_id=file_id, reason="not_found")
-        return None
-
     try:
-        metadata.created_at = time.time()
-        metadata.ttl = valid_ttl
-        metadata.save(metadata_path)
+        with _metadata_lock:
+            metadata = FileMetadata.from_file(metadata_path)
+            if not metadata or metadata.is_expired or not file_path.exists():
+                log_event("extend_ttl_failed", file_id=file_id, reason="not_found")
+                return None
+            metadata.created_at = time.time()
+            metadata.ttl = valid_ttl
+            metadata.save(metadata_path)
         log_event("extend_ttl_success", file_id=file_id, ttl=valid_ttl)
         return _get_file_info(file_id)
     except Exception as e:
@@ -1264,13 +1271,8 @@ async def api_upload_file(request: Request):
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 
-@app.get("/d/{file_id}/{filename}")
-async def download_file(file_id: str, filename: str, dl: Optional[str] = None):
-    """
-    Download a file by ID and filename
-
-    Returns 404 if file not found or expired
-    """
+def _download_file(file_id: str, filename: str = "", dl: Optional[str] = None) -> FileResponse:
+    """Synchronous file download logic executed in a threadpool worker."""
     try:
         file_path, metadata_path = get_file_paths(file_id)
     except ValueError:
@@ -1285,9 +1287,15 @@ async def download_file(file_id: str, filename: str, dl: Optional[str] = None):
     if metadata.is_expired:
         # Cleanup expired file
         if file_path.exists():
-            file_path.unlink()
+            try:
+                file_path.unlink()
+            except FileNotFoundError:
+                pass
         if metadata_path.exists():
-            metadata_path.unlink()
+            try:
+                metadata_path.unlink()
+            except FileNotFoundError:
+                pass
         raise HTTPException(status_code=404, detail="File expired")
 
     # Verify file exists
@@ -1306,23 +1314,38 @@ async def download_file(file_id: str, filename: str, dl: Optional[str] = None):
 
     now = time.time()
     if is_inline and not force_download:
-        metadata.views += 1
-        metadata.last_viewed_at = now
         headers = {"Content-Disposition": "inline"}
     else:
-        metadata.downloads += 1
-        metadata.last_downloaded_at = now
-        from urllib.parse import quote as urlquote
         encoded_filename = urlquote(metadata.filename, safe="")
         headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
 
-    metadata.save(metadata_path)
+    with _metadata_lock:
+        # Re-read under the lock so this increment is based on the latest
+        # saved state, not the copy read before the lock was acquired.
+        fresh = FileMetadata.from_file(metadata_path) or metadata
+        if is_inline and not force_download:
+            fresh.views += 1
+            fresh.last_viewed_at = now
+        else:
+            fresh.downloads += 1
+            fresh.last_downloaded_at = now
+        fresh.save(metadata_path)
 
     return FileResponse(
         path=file_path,
         media_type=content_type,
         headers=headers
     )
+
+
+@app.get("/d/{file_id}/{filename}")
+async def download_file(file_id: str, filename: str, dl: Optional[str] = None):
+    """
+    Download a file by ID and filename
+
+    Returns 404 if file not found or expired
+    """
+    return await run_in_threadpool(_download_file, file_id, filename, dl)
 
 
 VIEWER_TEMPLATE = """<!DOCTYPE html>
@@ -1465,9 +1488,8 @@ def format_expiry(expires_in: int) -> str:
     return f"Expira em {expires_in // 86400} dia(s)"
 
 
-@app.get("/v/{file_id}/{filename}", response_class=HTMLResponse)
-async def view_file(file_id: str, filename: str):
-    """Viewer page for images"""
+def _view_file(file_id: str, filename: str = "") -> Response:
+    """Synchronous viewer page logic executed in a threadpool worker."""
     try:
         file_path, metadata_path = get_file_paths(file_id)
     except ValueError:
@@ -1479,9 +1501,15 @@ async def view_file(file_id: str, filename: str):
 
     if metadata.is_expired:
         if file_path.exists():
-            file_path.unlink()
+            try:
+                file_path.unlink()
+            except FileNotFoundError:
+                pass
         if metadata_path.exists():
-            metadata_path.unlink()
+            try:
+                metadata_path.unlink()
+            except FileNotFoundError:
+                pass
         raise HTTPException(status_code=404, detail="File expired")
 
     if not file_path.exists():
@@ -1504,6 +1532,12 @@ async def view_file(file_id: str, filename: str):
         file_id_json=json.dumps(file_id).replace("</", "<\\/"),
         expiry_text=format_expiry(metadata.expires_in),
     ))
+
+
+@app.get("/v/{file_id}/{filename}", response_class=HTMLResponse)
+async def view_file(file_id: str, filename: str):
+    """Viewer page for images"""
+    return await run_in_threadpool(_view_file, file_id, filename)
 
 
 @app.post("/admin/set-all-infinite")

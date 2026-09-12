@@ -5,19 +5,23 @@ import re
 import time
 import uuid
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app import (
     BASE_URL,
     FileMetadata,
+    _download_file,
     _file_meta_dict,
     _get_file_info,
     _list_active_files,
+    _view_file,
     api_list_files,
     app,
     delete_file,
     delete_file_by_id,
     delete_file_endpoint,
+    download_file,
     extend_file_ttl,
     extend_ttl,
     get_file,
@@ -29,6 +33,7 @@ from app import (
     patch_file_ttl,
     upload_file,
     validate_ttl,
+    view_file,
 )
 
 
@@ -609,6 +614,8 @@ def test_routes_are_async_def(monkeypatch, auth_client, isolate_data_dir):
     assert asyncio.iscoroutinefunction(get_file)
     assert asyncio.iscoroutinefunction(delete_file_endpoint)
     assert asyncio.iscoroutinefunction(patch_file_ttl)
+    assert asyncio.iscoroutinefunction(download_file)
+    assert asyncio.iscoroutinefunction(view_file)
 
     calls = []
     import starlette.concurrency
@@ -639,6 +646,77 @@ def test_routes_are_async_def(monkeypatch, auth_client, isolate_data_dir):
     # 4. DELETE /api/files/{id}
     auth_client.delete(f"/api/files/{file_id}")
     assert "delete_file_by_id" in calls
+
+    # 5. GET /d/{id}/{filename}
+    dl_id = str(uuid.uuid4())
+    dl_meta = FileMetadata(dl_id, "dl.txt", 3600, time.time())
+    dl_meta.save(isolate_data_dir / f"{dl_id}.meta.json")
+    (isolate_data_dir / dl_id).write_bytes(b"hello")
+    auth_client.get(f"/d/{dl_id}/dl.txt")
+    assert "_download_file" in calls
+
+    # 6. GET /v/{id}/{filename}
+    auth_client.get(f"/v/{dl_id}/dl.txt")
+    assert "_view_file" in calls
+
+
+def test_download_and_view_file_helpers_are_sync(isolate_data_dir):
+    """Confirm that the extracted helpers for download_file and view_file are synchronous functions (not coroutines)
+    and can be called directly/synchronously to perform blocking disk I/O."""
+    assert not asyncio.iscoroutinefunction(_download_file)
+    assert not asyncio.iscoroutinefunction(_view_file)
+
+    # Test _download_file sync execution directly
+    file_id = str(uuid.uuid4())
+    meta = FileMetadata(file_id, "test.png", 3600, time.time())
+    meta.save(isolate_data_dir / f"{file_id}.meta.json")
+    (isolate_data_dir / file_id).write_bytes(b"fakepng")
+
+    # Call _download_file directly (synchronously)
+    resp = _download_file(file_id, "test.png")
+    assert not asyncio.iscoroutine(resp)
+    assert resp.status_code == 200
+    assert resp.media_type == "image/png"
+    assert resp.headers["content-disposition"] == "inline"
+
+    # Reload meta to verify views incremented synchronously
+    reloaded = FileMetadata.from_file(isolate_data_dir / f"{file_id}.meta.json")
+    assert reloaded.views == 1
+
+    # Call _download_file with dl=1
+    resp_dl = _download_file(file_id, "test.png", dl="1")
+    assert resp_dl.status_code == 200
+    assert "attachment" in resp_dl.headers["content-disposition"]
+
+    # Reload meta to verify downloads incremented synchronously
+    reloaded = FileMetadata.from_file(isolate_data_dir / f"{file_id}.meta.json")
+    assert reloaded.downloads == 1
+
+    # Test _view_file sync execution directly for image
+    view_resp = _view_file(file_id, "test.png")
+    assert not asyncio.iscoroutine(view_resp)
+    assert view_resp.status_code == 200
+    assert "test.png" in view_resp.body.decode("utf-8")
+
+    # Test _view_file sync execution directly for non-image (redirects)
+    txt_id = str(uuid.uuid4())
+    txt_meta = FileMetadata(txt_id, "doc.txt", 3600, time.time())
+    txt_meta.save(isolate_data_dir / f"{txt_id}.meta.json")
+    (isolate_data_dir / txt_id).write_bytes(b"text")
+
+    view_txt_resp = _view_file(txt_id, "doc.txt")
+    assert not asyncio.iscoroutine(view_txt_resp)
+    assert view_txt_resp.status_code == 307
+    assert view_txt_resp.headers["location"] == f"/d/{txt_id}/doc.txt"
+
+    # Verify 404 behavior raises HTTPException synchronously
+    with pytest.raises(HTTPException) as exc_info:
+        _download_file("invalid-id", "test.png")
+    assert exc_info.value.status_code == 404
+
+    with pytest.raises(HTTPException) as exc_info:
+        _view_file("invalid-id", "test.png")
+    assert exc_info.value.status_code == 404
 
 
 def test_delete_file_by_id_handles_race_condition_file_not_found(isolate_data_dir, capsys, monkeypatch):
@@ -722,6 +800,16 @@ def test_direct_malicious_file_id_validation(isolate_data_dir, tmp_path):
 
         # extend_file_ttl must return None
         assert extend_file_ttl(bad_id, 3600) is None
+
+        # _download_file must raise HTTPException 404
+        with pytest.raises(HTTPException) as exc:
+            _download_file(bad_id, "test.png")
+        assert exc.value.status_code == 404
+
+        # _view_file must raise HTTPException 404
+        with pytest.raises(HTTPException) as exc:
+            _view_file(bad_id, "test.png")
+        assert exc.value.status_code == 404
 
     # Canary must remain intact
     assert canary.exists()
