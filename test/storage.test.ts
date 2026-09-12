@@ -735,3 +735,47 @@ describe("generate_thumbnail", () => {
     expect([meta.width, meta.height]).toEqual([100, 200]);
   });
 });
+
+/**
+ * Regression: ids read from a sidecar must never reach the filesystem
+ * unchecked. A corrupt/hand-edited <id>.meta.json used to feed deleteThumbnail
+ * (and the thumbnail route) a raw string such as "../../victim".
+ */
+describe("sidecar ids are not trusted for filesystem paths", () => {
+  it("deleteFileById never unlinks outside the data dir for a traversal id", async () => {
+    const canonical = randomUUID();
+    await fsp.writeFile(
+      path.join(dataDir, canonical + ".meta.json"),
+      JSON.stringify({
+        file_id: "../../victim",
+        filename: "x.txt",
+        ttl: 3600,
+        created_at: nowSeconds(),
+      }),
+    );
+    const victim = path.join(path.dirname(dataDir), "victim.thumb.jpg");
+    await fsp.writeFile(victim, "canario");
+
+    await deleteFileById(canonical).catch(() => undefined);
+
+    // The canary outside the data dir must survive.
+    expect(fs.existsSync(victim)).toBe(true);
+  });
+
+  it("getFileInfo ignores a sidecar whose embedded id is another file", async () => {
+    const requested = randomUUID();
+    const other = randomUUID();
+    await fsp.writeFile(
+      path.join(dataDir, requested + ".meta.json"),
+      JSON.stringify({
+        file_id: other,
+        filename: "x.txt",
+        ttl: 3600,
+        created_at: nowSeconds(),
+      }),
+    );
+    await fsp.writeFile(path.join(dataDir, requested), "content");
+
+    expect(await getFileInfo(requested)).toBeNull();
+  });
+});

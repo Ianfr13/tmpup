@@ -64,7 +64,7 @@ export interface HttpResult {
  */
 export function httpCall(
   url: string,
-  options: { method?: string; headers?: Record<string, string>; body?: Buffer | string } = {},
+  options: { method?: string; headers?: Record<string, string>; body?: Buffer | string; timeoutMs?: number } = {},
 ): Promise<HttpResult> {
   return new Promise<HttpResult>((resolve, reject) => {
     const request = httpRequest(
@@ -73,6 +73,8 @@ export function httpCall(
       (response) => {
         const chunks: Buffer[] = [];
         response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        // A reset mid-response would otherwise emit an unhandled 'error'.
+        response.on("error", reject);
         response.on("end", () =>
           resolve({
             status: response.statusCode ?? 0,
@@ -82,6 +84,10 @@ export function httpCall(
         );
       },
     );
+    const timeoutMs = options.timeoutMs ?? 10_000;
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error(`httpCall timed out after ${timeoutMs}ms: ${url}`));
+    });
     request.on("error", reject);
     request.end(options.body);
   });

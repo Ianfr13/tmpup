@@ -27,6 +27,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     // close() must not wait for idle keep-alive sockets (a browser/undici pool
     // would otherwise hold the shutdown open); in-flight requests still finish.
     forceCloseConnections: "idle",
+    // Fastify sets requestTimeout to 0 (= disabled) on the underlying server, so
+    // the documented drain of an oversized body and the upload stream would have
+    // no bound at all against a client that dribbles bytes forever.
+    requestTimeout: 300_000,
   });
 
   // app.py always consumed the raw request bytes (request.stream()), whatever

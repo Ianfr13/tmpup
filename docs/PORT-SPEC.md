@@ -236,5 +236,16 @@ Adaptações conscientes (documentar no teste): os testes Python que verificam
     não consegue mais apontar caminhos de thumbnail para outro lugar (404).
 31. **`cleanupExpiredFiles`** apaga o arquivo dono do próprio sidecar (pelo nome),
     não o id embutido no JSON — um sidecar copiado não remove mais um arquivo vivo.
+32. **Ids vindos de sidecar são tratados como não confiáveis**: `deleteThumbnail`
+    canonicaliza UUIDs (e recusa separadores de caminho), `resolveStoredFile` exige que
+    o id embutido seja um UUID igual ao nome do sidecar, e `getFileInfo` devolve 404
+    quando o id embutido aponta para outro arquivo.
+33. **Listagem resiliente**: um sidecar ilegível é ignorado em vez de derrubar
+    `/api/files`/MCP com 500 (o app.py também pulava), e a migração de TTL conta/loga
+    falhas inesperadas em vez de engoli-las.
+34. **`requestTimeout: 300s`** no Fastify: ele zera o timeout padrão do Node, então
+    sem isso o drain de um corpo grande (item 24) ficaria sem limite.
+35. **`Range` aceita unidade sem distinguir maiúsculas e com espaços** (`BYTES = 0-1`),
+    como o `_parse_range_header` do Starlette.
 
 

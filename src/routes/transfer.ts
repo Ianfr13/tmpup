@@ -116,24 +116,10 @@ async function resolveStoredFile(
     throw new HttpError(404, "File not found");
   }
 
-  if (metadata.isExpired) {
-    // Purge under the metadata lock (same invariant as deleteFileById) so a
-    // concurrent counter save cannot recreate the sidecar we are removing.
-    await withMetadataLock(async () => {
-      await removeIfExists(filePath);
-      await removeIfExists(metadataPath);
-    });
-    await deleteThumbnail(metadata.fileId);
-    throw new HttpError(404, "File expired");
-  }
-
-  if (!(await fileExists(filePath))) {
-    throw new HttpError(404, "File not found");
-  }
-
-  // Thumbnail paths are built from the id stored INSIDE the sidecar, so a
-  // tampered/corrupt sidecar must not be able to point them elsewhere: the
-  // embedded id has to be a UUID and match the sidecar's own filename.
+  // The sidecar's embedded id is used for thumbnail paths and for the deletion
+  // below, so it must be a UUID that matches the sidecar's own filename before
+  // anything touches the filesystem (a corrupt/tampered sidecar must not be
+  // able to reach other files).
   let embeddedId: string;
   try {
     embeddedId = parseFileId(metadata.fileId);
@@ -141,6 +127,21 @@ async function resolveStoredFile(
     throw new HttpError(404, "File not found");
   }
   if (embeddedId !== parseFileId(fileId)) {
+    throw new HttpError(404, "File not found");
+  }
+
+  if (metadata.isExpired) {
+    // Purge under the metadata lock (same invariant as deleteFileById) so a
+    // concurrent counter save cannot recreate the sidecar we are removing.
+    await withMetadataLock(async () => {
+      await removeIfExists(filePath);
+      await removeIfExists(metadataPath);
+    });
+    await deleteThumbnail(embeddedId);
+    throw new HttpError(404, "File expired");
+  }
+
+  if (!(await fileExists(filePath))) {
     throw new HttpError(404, "File not found");
   }
 
@@ -275,7 +276,9 @@ export function parseRangeHeader(
   size: number,
 ): ByteRange | "unsatisfiable" | null {
   if (!header) return null;
-  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  // Starlette does units.strip().lower() before comparing, so "BYTES=0-1" and
+  // "bytes = 0-1" are valid ranges too (RFC 9110: units are case-insensitive).
+  const match = /^bytes\s*=\s*(\d*)\s*-\s*(\d*)$/i.exec(header.trim());
   if (!match) return null;
   const rawStart = match[1] ?? "";
   const rawEnd = match[2] ?? "";

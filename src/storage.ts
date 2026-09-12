@@ -270,10 +270,12 @@ export function getFilePaths(fileId: unknown): { filePath: string; metadataPath:
 
 /** Format FileMetadata into its public metadata dictionary. */
 export async function fileMetaDict(metadata: FileMetadata): Promise<PublicFileMetadata> {
+  // The id is used verbatim in the public dict, like app.py's _file_meta_dict.
+  const fileId = metadata.fileId;
   let sizeBytes = metadata.sizeBytes || 0;
   if (sizeBytes <= 0) {
     try {
-      const { filePath } = getFilePaths(metadata.fileId);
+      const { filePath } = getFilePaths(fileId);
       sizeBytes = (await fsp.stat(filePath)).size;
     } catch (err) {
       if (isNotFound(err) || (err instanceof Error && err.message.startsWith("Invalid file ID"))) {
@@ -285,10 +287,10 @@ export async function fileMetaDict(metadata: FileMetadata): Promise<PublicFileMe
   }
 
   return {
-    id: metadata.fileId,
+    id: fileId,
     filename: metadata.filename,
-    url: `${config.baseUrl}/d/${metadata.fileId}/${metadata.filename}`,
-    view_url: `${config.baseUrl}/v/${metadata.fileId}/${metadata.filename}`,
+    url: `${config.baseUrl}/d/${fileId}/${metadata.filename}`,
+    view_url: `${config.baseUrl}/v/${fileId}/${metadata.filename}`,
     is_image: isImageFile(metadata.filename),
     expires_in: metadata.expiresIn,
     created_at: metadata.createdAt,
@@ -312,8 +314,10 @@ async function metadataSidecars(dir: string): Promise<string[]> {
     }
     throw err;
   }
-  // glob's `*` never matches a leading dot.
-  return entries.filter((name) => name.endsWith(METADATA_SUFFIX) && !name.startsWith("."));
+  // pathlib's Path.glob (unlike the module-level glob.glob) DOES match
+  // leading-dot names, so hidden sidecars stay visible to listings, cleanup and
+  // the TTL migration, exactly like app.py.
+  return entries.filter((name) => name.endsWith(METADATA_SUFFIX));
 }
 
 /** Run `worker` over `items` with at most `limit` calls in flight. */
@@ -343,8 +347,14 @@ export async function listActiveFiles(): Promise<PublicFileMetadata[]> {
   // Bounded concurrency: production keeps ~1880 sidecars and the sequential
   // version paid one round trip per file (read + stat) on every listing.
   const dicts = await mapWithConcurrency(entries, 32, async (entry) => {
-    const metadata = await FileMetadata.fromFile(path.join(dir, entry));
-    return metadata && !metadata.isExpired ? await fileMetaDict(metadata) : null;
+    try {
+      const metadata = await FileMetadata.fromFile(path.join(dir, entry));
+      return metadata && !metadata.isExpired ? await fileMetaDict(metadata) : null;
+    } catch {
+      // One unreadable/odd sidecar must not fail the whole listing (app.py's
+      // from_file returned None and the entry was skipped).
+      return null;
+    }
   });
   const files = dicts.filter((dict): dict is PublicFileMetadata => dict !== null);
   return files.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
@@ -363,13 +373,41 @@ export async function getFileInfo(fileId: unknown): Promise<PublicFileMetadata |
   if (!metadata || metadata.isExpired || !(await fileExists(filePath))) {
     return null;
   }
+  // A corrupt/copied sidecar must not answer for another file's id (the route
+  // would otherwise hand out foreign urls and size_bytes).
+  try {
+    if (parseFileId(metadata.fileId) !== parseFileId(fileId)) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
   return fileMetaDict(metadata);
+}
+
+/**
+ * Path-safe id for thumbnail files.
+ *
+ * Callers pass ids read from sidecar JSON. UUIDs are canonicalized; other
+ * values (only test fixtures today) are kept as-is but must not contain a path
+ * separator, so a tampered sidecar cannot delete files outside the data dir.
+ */
+function safeThumbnailId(fileId: string): string {
+  try {
+    return parseFileId(fileId);
+  } catch (err) {
+    if (fileId.includes("/") || fileId.includes("\\") || fileId.includes("..")) {
+      throw err;
+    }
+    return fileId;
+  }
 }
 
 /** Remove the cached thumbnail and failure marker for `canonicalFileId`. */
 export async function deleteThumbnail(canonicalFileId: string): Promise<void> {
+  const fileId = safeThumbnailId(canonicalFileId);
   for (const suffix of THUMB_SUFFIXES) {
-    const target = path.join(dataDirPath(), `${canonicalFileId}${suffix}`);
+    const target = path.join(dataDirPath(), `${fileId}${suffix}`);
     try {
       await fsp.unlink(target);
     } catch (err) {
@@ -471,19 +509,19 @@ export async function cleanupExpiredFiles(): Promise<number> {
   let cleaned = 0;
   for (const entry of await metadataSidecars(dir)) {
     const metadataPath = path.join(dir, entry);
-    const metadata = await FileMetadata.fromFile(metadataPath);
-    if (!metadata || !metadata.isExpired) {
-      continue;
-    }
     // Delete the sidecar's OWN file. Using the id embedded in the JSON could
     // target a different, live file when a sidecar is corrupt or hand-edited.
     const fileId = entry.slice(0, -METADATA_SUFFIX.length);
     const filePath = path.join(dir, fileId);
 
     try {
-      // Same single-writer invariant as the other mutators: a counter save on
-      // the request path must not interleave with this purge.
-      await withMetadataLock(async () => {
+      // The expiry decision is re-taken under the lock: a concurrent
+      // extend_ttl / set-all-infinite must not race this purge.
+      const removed = await withMetadataLock(async () => {
+        const metadata = await FileMetadata.fromFile(metadataPath);
+        if (!metadata || !metadata.isExpired) {
+          return false;
+        }
         if (await fileExists(filePath)) {
           await fsp.unlink(filePath);
         }
@@ -491,8 +529,11 @@ export async function cleanupExpiredFiles(): Promise<number> {
           await fsp.unlink(metadataPath);
         }
         await deleteThumbnail(fileId);
+        return true;
       });
-      cleaned += 1;
+      if (removed) {
+        cleaned += 1;
+      }
     } catch (err) {
       console.log(`Error cleaning up ${fileId}: ${errorMessage(err)}`);
     }
@@ -513,6 +554,7 @@ export async function cleanupExpiredFiles(): Promise<number> {
 export async function setAllFilesInfiniteTtl(): Promise<number> {
   const dir = dataDirPath();
   let updated = 0;
+  let errors = 0;
   for (const entry of await metadataSidecars(dir)) {
     const metadataPath = path.join(dir, entry);
     try {
@@ -526,9 +568,16 @@ export async function setAllFilesInfiniteTtl(): Promise<number> {
           updated += 1;
         }
       });
-    } catch {
-      // Unreadable sidecars are skipped, matching FileMetadata.from_file -> None.
+    } catch (err) {
+      // A missing/invalid sidecar is skipped (fromFile already returns null for
+      // those); anything else is a real failure and must not be hidden, or the
+      // admin route would report success while a file stayed expiring.
+      console.log(`Error migrating ${entry}: ${errorMessage(err)}`);
+      errors += 1;
     }
+  }
+  if (errors > 0) {
+    console.log(`Failed to migrate ${errors} file(s)`);
   }
   return updated;
 }
