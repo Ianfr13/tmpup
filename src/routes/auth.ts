@@ -106,10 +106,15 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
           grant_type: "authorization_code",
         }).toString(),
       });
-      // An error page (proxy/HTML) must not surface as a JSON parse crash.
-      const tokenData = tokenResponse.ok
-        ? ((await tokenResponse.json().catch(() => ({}))) as { access_token?: string })
-        : {};
+      // An error page (proxy/HTML) must not surface as a JSON parse crash, and
+      // a literal `null` body is valid JSON that json() resolves to null.
+      const tokenPayload = tokenResponse.ok
+        ? await tokenResponse.json().catch(() => null)
+        : null;
+      const tokenData =
+        typeof tokenPayload === "object" && tokenPayload !== null
+          ? (tokenPayload as { access_token?: string })
+          : {};
 
       if (!tokenData.access_token) {
         throw new HttpError(401, GOOGLE_AUTH_FAILED);
@@ -121,10 +126,11 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       if (!userinfoResponse.ok) {
         throw new HttpError(401, GOOGLE_AUTH_FAILED);
       }
-      const userinfo = (await userinfoResponse.json().catch(() => ({}))) as {
-        email?: string;
-        email_verified?: boolean;
-      };
+      const userinfoPayload = await userinfoResponse.json().catch(() => null);
+      const userinfo =
+        typeof userinfoPayload === "object" && userinfoPayload !== null
+          ? (userinfoPayload as { email?: string; email_verified?: boolean })
+          : {};
 
       if (userinfo.email_verified !== true) {
         throw new HttpError(403, "Email Google nao verificado");

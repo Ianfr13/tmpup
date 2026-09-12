@@ -26,6 +26,8 @@ const DOC_EXTENSIONS = new Set(["pdf", "doc", "docx", "txt"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "mov", "avi", "mkv", "webm"]);
 
 const THUMB_SUFFIXES = [".thumb.jpg", ".thumb.fail"] as const;
+/** Sidecar suffix (Python's `DATA_DIR.glob("*.meta.json")`). */
+const METADATA_SUFFIX = ".meta.json";
 
 /** Current POSIX timestamp in seconds (Python's `time.time()`). */
 function nowSeconds(): number {
@@ -311,7 +313,7 @@ async function metadataSidecars(dir: string): Promise<string[]> {
     throw err;
   }
   // glob's `*` never matches a leading dot.
-  return entries.filter((name) => name.endsWith(".meta.json") && !name.startsWith("."));
+  return entries.filter((name) => name.endsWith(METADATA_SUFFIX) && !name.startsWith("."));
 }
 
 /** Run `worker` over `items` with at most `limit` calls in flight. */
@@ -468,18 +470,15 @@ export async function cleanupExpiredFiles(): Promise<number> {
   const dir = dataDirPath();
   let cleaned = 0;
   for (const entry of await metadataSidecars(dir)) {
-    const metadata = await FileMetadata.fromFile(path.join(dir, entry));
+    const metadataPath = path.join(dir, entry);
+    const metadata = await FileMetadata.fromFile(metadataPath);
     if (!metadata || !metadata.isExpired) {
       continue;
     }
-    const fileId = metadata.fileId;
-    let filePath: string;
-    let metadataPath: string;
-    try {
-      ({ filePath, metadataPath } = getFilePaths(fileId));
-    } catch {
-      continue;
-    }
+    // Delete the sidecar's OWN file. Using the id embedded in the JSON could
+    // target a different, live file when a sidecar is corrupt or hand-edited.
+    const fileId = entry.slice(0, -METADATA_SUFFIX.length);
+    const filePath = path.join(dir, fileId);
 
     try {
       // Same single-writer invariant as the other mutators: a counter save on

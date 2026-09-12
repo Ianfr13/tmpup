@@ -72,7 +72,7 @@ async function readJsonBody(request: FastifyRequest): Promise<unknown> {
  * Fastify's querystring parser returns an array for a repeated key, while
  * FastAPI's `?q=a&q=b` keeps the first value; normalize to the first.
  */
-function firstQuery(value: string | string[] | undefined): string | undefined {
+function firstValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
@@ -96,6 +96,12 @@ async function writeRequestBodyTo(body: unknown, filePath: string): Promise<numb
   if (Buffer.isBuffer(body)) {
     await pipeline(Readable.from([body]), createWriteStream(filePath));
     return body.length;
+  }
+  if (body === undefined || body === null) {
+    // No body at all (no Content-Length/Transfer-Encoding): Fastify never runs
+    // a parser, so there are zero bytes to store.
+    await pipeline(Readable.from([]), createWriteStream(filePath));
+    return 0;
   }
   if (typeof body === "string") {
     // Parsed text body (only reachable if a content-type parser is re-added):
@@ -122,10 +128,10 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
   }>("/api/files", async (request) => {
     const allFiles = await listActiveFiles();
     return filterSortPaginateFiles(allFiles, {
-      q: firstQuery(request.query.q) ?? null,
-      kind: firstQuery(request.query.kind) ?? "all",
-      sort: firstQuery(request.query.sort) ?? "date",
-      page: parsePage(firstQuery(request.query.page)),
+      q: firstValue(request.query.q) ?? null,
+      kind: firstValue(request.query.kind) ?? "all",
+      sort: firstValue(request.query.sort) ?? "date",
+      page: parsePage(firstValue(request.query.page)),
     });
   });
 
@@ -174,16 +180,13 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
   app.post("/api/upload", async (request) => {
     // Starlette's headers.get(name) returns the first value, and an absent
     // header is undefined (the `or "3600"` default only applies then).
-    const firstHeader = (value: string | string[] | undefined): string | undefined =>
-      Array.isArray(value) ? value[0] : value;
-
-    const rawFilename = firstHeader(request.headers["x-filename"]);
+    const rawFilename = firstValue(request.headers["x-filename"]);
     if (!rawFilename) {
       throw new HttpError(400, "X-Filename header required");
     }
     const filename = pythonUnquote(rawFilename);
 
-    const rawTtl = firstHeader(request.headers["x-ttl"]) ?? "3600";
+    const rawTtl = firstValue(request.headers["x-ttl"]) ?? "3600";
     let ttl: number;
     try {
       ttl = pythonInt(rawTtl);

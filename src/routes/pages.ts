@@ -27,9 +27,11 @@ function renderMcpSetup(): string {
   };
   return renderMcpSetupPage({
     baseUrl: escapeHtml(config.baseUrl),
-    // The JSON goes into a single-quoted onclick attribute, so apostrophes must
-    // not be able to close it (app.py interpolated both values raw).
-    mcpUrlJs: jsonForScript(mcpUrl).replaceAll("'", "&#x27;"),
+    // The JSON goes into a single-quoted onclick attribute, so both the
+    // apostrophe and the ampersand must be escaped: an attribute value decodes
+    // character references, so a literal "&quot;" in BASE_URL would otherwise
+    // become a quote inside the JS string (app.py interpolated it raw).
+    mcpUrlJs: escapeHtml(jsonForScript(mcpUrl), false).replaceAll("'", "&#x27;"),
     // Rendered inside a <pre>: escape the markup-sensitive characters without
     // touching the quotes of the JSON itself (app.py interpolated it raw).
     jsonConfig: escapeHtml(JSON.stringify(configDict, null, 2), false),

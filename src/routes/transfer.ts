@@ -22,6 +22,7 @@ import {
   generateThumbnail,
   getFilePaths,
   isImageFile,
+  parseFileId,
   withMetadataLock,
 } from "../storage.js";
 import { pythonQuote } from "../url.js";
@@ -71,6 +72,22 @@ export function isScriptableInlineType(contentType: string): boolean {
   return SCRIPTABLE_INLINE_TYPES.has(base);
 }
 
+/**
+ * Headers that neutralize a scriptable document served inline.
+ *
+ * Applied by /d AND by every /t fallback that re-serves the original file
+ * (when sharp cannot rasterize it or a .thumb.fail marker exists): an SVG is a
+ * valid image for app.py's extension list, so without this the thumbnail route
+ * would hand it back unsandboxed.
+ */
+export function inlineSafetyHeaders(contentType: string): Record<string, string> {
+  if (!isScriptableInlineType(contentType)) return {};
+  return {
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "sandbox",
+  };
+}
+
 /** `force_download = bool(dl and dl.lower() not in ("0", "false", "no"))` */
 export function isForcedDownload(dl: string | null | undefined): boolean {
   if (!dl) return false;
@@ -114,6 +131,19 @@ async function resolveStoredFile(
     throw new HttpError(404, "File not found");
   }
 
+  // Thumbnail paths are built from the id stored INSIDE the sidecar, so a
+  // tampered/corrupt sidecar must not be able to point them elsewhere: the
+  // embedded id has to be a UUID and match the sidecar's own filename.
+  let embeddedId: string;
+  try {
+    embeddedId = parseFileId(metadata.fileId);
+  } catch {
+    throw new HttpError(404, "File not found");
+  }
+  if (embeddedId !== parseFileId(fileId)) {
+    throw new HttpError(404, "File not found");
+  }
+
   return { filePath, metadataPath, metadata };
 }
 
@@ -136,10 +166,7 @@ export async function downloadFile(
   const headers: Record<string, string> = {};
   if (inline && !forceDownload) {
     headers["Content-Disposition"] = "inline";
-    if (isScriptableInlineType(contentType)) {
-      headers["X-Content-Type-Options"] = "nosniff";
-      headers["Content-Security-Policy"] = "sandbox";
-    }
+    Object.assign(headers, inlineSafetyHeaders(contentType));
   } else {
     // app.py: urlquote(metadata.filename, safe="") -- slashes are encoded too.
     headers["Content-Disposition"] = `attachment; filename*=UTF-8''${pythonQuote(metadata.filename, "")}`;
@@ -213,8 +240,15 @@ export async function thumbnailFile(fileId: string, filename = ""): Promise<File
   }
 
   const failMarkerPath = path.join(config.dataDir, `${metadata.fileId}.thumb.fail`);
+  // Both fallbacks re-serve the original file, so a scriptable type (SVG) must
+  // carry the sandbox headers here too.
+  const fallback = {
+    filePath,
+    mediaType: guessContentType(metadata.filename),
+    headers: inlineSafetyHeaders(guessContentType(metadata.filename)),
+  };
   if (await fileExists(failMarkerPath)) {
-    return { filePath, mediaType: guessContentType(metadata.filename), headers: {} };
+    return fallback;
   }
 
   const success = await generateThumbnail(filePath, thumbPath, 200, metadata.fileId);
@@ -224,7 +258,7 @@ export async function thumbnailFile(fileId: string, filename = ""): Promise<File
     } catch {
       // touch() failures are ignored in app.py
     }
-    return { filePath, mediaType: guessContentType(metadata.filename), headers: {} };
+    return fallback;
   }
 
   return { filePath: thumbPath, mediaType: "image/jpeg", headers: { ...THUMBNAIL_CACHE_HEADERS } };
@@ -268,7 +302,13 @@ export function parseRangeHeader(
 function isNotModified(request: FastifyRequest, etag: string, lastModified: Date): boolean {
   const ifNoneMatch = request.headers["if-none-match"];
   if (typeof ifNoneMatch === "string" && ifNoneMatch.length > 0) {
-    return ifNoneMatch.split(",").some((candidate) => candidate.trim() === etag);
+    const normalize = (value: string): string => value.trim().replace(/^W\//, "");
+    return ifNoneMatch.split(",").some((candidate) => {
+      const trimmed = candidate.trim();
+      // RFC 9110: `*` matches any current representation; weak validators are
+      // compared without the W/ prefix for GET/HEAD.
+      return trimmed === "*" || normalize(trimmed) === normalize(etag);
+    });
   }
   const ifModifiedSince = request.headers["if-modified-since"];
   if (typeof ifModifiedSince === "string" && ifModifiedSince.length > 0) {

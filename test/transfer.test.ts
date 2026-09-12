@@ -6,6 +6,10 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+
+import { config } from "../src/config.js";
 import { authHeader, buildAuthenticatedServer, httpCall, makeDataDir, removeDataDir, restoreConfig, useApiKeys, TEST_API_KEY } from "./helpers.js";
 
 let dataDir = "";
@@ -130,6 +134,28 @@ describe("scriptable inline uploads are sandboxed", () => {
       }
     }
   });
+
+
+describe("thumbnail fallback is sandboxed too", () => {
+  it("adds the sandbox headers when /t falls back to the SVG original", async () => {
+    const svg = Buffer.from(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><script>alert(1)</script></svg>",
+    );
+    const { app, address, fileId } = await serve("evil.svg", svg);
+    try {
+      // Force the fail-marker branch without depending on sharp's pixel limits.
+      await writeFile(path.join(config.dataDir, fileId + ".thumb.fail"), "");
+      const res = await httpCall(address + "/t/" + fileId + "/evil.svg");
+      expect(res.status).toBe(200);
+      expect(String(res.headers["content-type"])).toContain("image/svg+xml");
+      expect(res.headers["x-content-type-options"]).toBe("nosniff");
+      expect(res.headers["content-security-policy"]).toBe("sandbox");
+      expect(res.body.toString("utf8")).toContain("<script>");
+    } finally {
+      await app.close();
+    }
+  });
+});
 
   it("does not add the sandbox to harmless inline types", async () => {
     const { app, address, fileId } = await serve("notes.txt", Buffer.from("hello"));

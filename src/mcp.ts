@@ -288,7 +288,7 @@ export async function registerMcpRoutes(app: FastifyInstance): Promise<void> {
     } catch (error) {
       if (!(error instanceof SyntaxError)) {
         // Invalid JSON is a client error (answered below), not a server fault.
-        console.error("mcp body read failed:", error);
+        logEvent("mcp_body_read_failed", { error: (error as Error).message });
       }
       await reply.code(400).send({
         jsonrpc: "2.0",

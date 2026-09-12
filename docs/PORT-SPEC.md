@@ -227,5 +227,14 @@ Adaptações conscientes (documentar no teste): os testes Python que verificam
     cliente.
 28. **Shutdown** usa `forceCloseConnections: "idle"`: o `close()` não espera conexões
     keep-alive ociosas (requisições em andamento terminam normalmente).
+29. **O fallback de thumbnail (`/t`)** que devolve o arquivo original (falha do sharp
+    ou marcador `.thumb.fail`) aplica os mesmos headers de sandbox do `/d`: um SVG
+    válido passa por `isImageFile`, então sem isso a rota de thumbnail reabriria o
+    XSS armazenado.
+30. **Id do sidecar é validado.** O `file_id` lido de dentro do `.meta.json` precisa
+    ser um UUID e bater com o nome do arquivo; um sidecar corrompido/editado à mão
+    não consegue mais apontar caminhos de thumbnail para outro lugar (404).
+31. **`cleanupExpiredFiles`** apaga o arquivo dono do próprio sidecar (pelo nome),
+    não o id embutido no JSON — um sidecar copiado não remove mais um arquivo vivo.
 
 
