@@ -1,21 +1,29 @@
 import asyncio
 import base64
+import inspect
 import json
 import re
 import time
 import uuid
+from pathlib import Path
+
 import pytest
+from PIL import Image
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+import app as app_module
 from app import (
     BASE_URL,
     FileMetadata,
+    HTML_TEMPLATE,
     _download_file,
     _file_meta_dict,
     _get_file_info,
     _list_active_files,
+    _thumbnail_file,
     _view_file,
+    _delete_thumbnail,
     api_list_files,
     app,
     delete_file,
@@ -24,6 +32,7 @@ from app import (
     download_file,
     extend_file_ttl,
     extend_ttl,
+    generate_thumbnail,
     get_file,
     get_file_info,
     get_file_paths,
@@ -1302,6 +1311,597 @@ def test_frontend_review_fixes_elements_and_handlers(auth_client, isolate_data_d
     # AC 6: Viewer has error element and error feedback on delete failure
     assert 'id="viewerError"' in viewer_html
     assert "Erro ao excluir arquivo" in viewer_html
+
+
+def test_generate_thumbnail_large_image(tmp_path):
+    """AC 2: generate_thumbnail produces a much smaller JPEG file and max dimension <= 200px."""
+    src = tmp_path / "large_image.png"
+    thumb = tmp_path / "large_image.thumb.jpg"
+
+    # Create a 1000x1000 RGB test image
+    img = Image.new("RGB", (1000, 1000), color=(120, 180, 240))
+    img.save(src, format="PNG")
+
+    original_size = src.stat().st_size
+    assert original_size > 0
+
+    success = generate_thumbnail(src, thumb, max_size=200)
+    assert success is True
+    assert thumb.exists()
+
+    thumb_size = thumb.stat().st_size
+    assert thumb_size < original_size / 2
+
+    with Image.open(thumb) as thumb_img:
+        assert thumb_img.format == "JPEG"
+        assert max(thumb_img.size) <= 200
+        assert thumb_img.size == (200, 200)
+
+
+def test_generate_thumbnail_rgba_transparency(tmp_path):
+    """AC 2: generate_thumbnail handles RGBA transparency by compositing on white background."""
+    src = tmp_path / "transparent.png"
+    thumb = tmp_path / "transparent.thumb.jpg"
+
+    # 400x200 RGBA image with transparency
+    img = Image.new("RGBA", (400, 200), color=(255, 0, 0, 128))
+    img.save(src, format="PNG")
+
+    success = generate_thumbnail(src, thumb, max_size=200)
+    assert success is True
+    assert thumb.exists()
+
+    with Image.open(thumb) as thumb_img:
+        assert thumb_img.format == "JPEG"
+        assert max(thumb_img.size) <= 200
+        # Aspect ratio 2:1 preserved (200x100)
+        assert thumb_img.size == (200, 100)
+        assert thumb_img.mode == "RGB"
+
+
+def test_generate_thumbnail_corrupt_file_returns_false(tmp_path):
+    """AC 2: generate_thumbnail with non-image data returns False without raising an exception."""
+    corrupt_file = tmp_path / "fake_image.png"
+    corrupt_file.write_bytes(b"not a valid png file at all \x00\xff\xee\xdd")
+    thumb = tmp_path / "fake.thumb.jpg"
+
+    success = generate_thumbnail(corrupt_file, thumb)
+    assert success is False
+    assert not thumb.exists()
+
+
+def test_thumbnail_file_helper_is_sync():
+    """AC 3: _thumbnail_file is synchronous (not coroutine) and called via run_in_threadpool."""
+    assert not inspect.iscoroutinefunction(_thumbnail_file)
+    assert callable(_thumbnail_file)
+
+
+def test_get_thumbnail_success_and_cached(isolate_data_dir):
+    """AC 2: GET /t/{file_id}/{filename} returns 200 image/jpeg with cache headers, and reuses cached file on second call."""
+    file_id = str(uuid.uuid4())
+    filename = "photo.png"
+    file_path = isolate_data_dir / file_id
+    meta_path = isolate_data_dir / f"{file_id}.meta.json"
+
+    # Create test image
+    img = Image.new("RGB", (600, 400), color=(100, 150, 200))
+    img.save(file_path, format="PNG")
+
+    meta = FileMetadata(
+        file_id=file_id,
+        filename=filename,
+        ttl=3600,
+        created_at=time.time(),
+        size_bytes=file_path.stat().st_size,
+    )
+    meta.save(meta_path)
+
+    client = TestClient(app)
+
+    # First request: generates thumbnail
+    res1 = client.get(f"/t/{file_id}/{filename}")
+    assert res1.status_code == 200
+    assert res1.headers["content-type"] == "image/jpeg"
+    assert "public" in res1.headers.get("cache-control", "")
+    assert "max-age=31536000" in res1.headers.get("cache-control", "")
+    assert "immutable" in res1.headers.get("cache-control", "")
+
+    thumb_path = isolate_data_dir / f"{file_id}.thumb.jpg"
+    assert thumb_path.exists()
+    mtime_before = thumb_path.stat().st_mtime_ns
+
+    # Small delay to ensure mtime would differ if file were rewritten
+    time.sleep(0.01)
+
+    # Second request: reuses cached thumbnail without regenerating
+    res2 = client.get(f"/t/{file_id}/{filename}")
+    assert res2.status_code == 200
+    assert res2.headers["content-type"] == "image/jpeg"
+    mtime_after = thumb_path.stat().st_mtime_ns
+    assert mtime_before == mtime_after
+
+
+def test_get_thumbnail_does_not_increment_views_or_downloads(isolate_data_dir):
+    """AC 2: GET /t/... does not increment metadata.views or metadata.downloads."""
+    file_id = str(uuid.uuid4())
+    filename = "picture.jpg"
+    file_path = isolate_data_dir / file_id
+    meta_path = isolate_data_dir / f"{file_id}.meta.json"
+
+    img = Image.new("RGB", (300, 300), color=(50, 100, 150))
+    img.save(file_path, format="JPEG")
+
+    meta = FileMetadata(
+        file_id=file_id,
+        filename=filename,
+        ttl=3600,
+        created_at=time.time(),
+        views=0,
+        downloads=0,
+    )
+    meta.save(meta_path)
+
+    client = TestClient(app)
+    res = client.get(f"/t/{file_id}/{filename}")
+    assert res.status_code == 200
+
+    saved_meta = FileMetadata.from_file(meta_path)
+    assert saved_meta.views == 0
+    assert saved_meta.downloads == 0
+
+
+def test_get_thumbnail_non_image_returns_404(isolate_data_dir):
+    """AC 2: GET /t/... for a file that is not an image returns 404."""
+    file_id = str(uuid.uuid4())
+    filename = "document.pdf"
+    file_path = isolate_data_dir / file_id
+    meta_path = isolate_data_dir / f"{file_id}.meta.json"
+
+    file_path.write_bytes(b"%PDF-1.4 test content")
+    meta = FileMetadata(file_id=file_id, filename=filename, ttl=3600, created_at=time.time())
+    meta.save(meta_path)
+
+    client = TestClient(app)
+    res = client.get(f"/t/{file_id}/{filename}")
+    assert res.status_code == 404
+
+
+def test_get_thumbnail_invalid_id_or_path_traversal(isolate_data_dir):
+    """AC 2: GET /t/... with invalid file_id or path traversal returns 404 and does not escape DATA_DIR."""
+    # Direct sync helper check for invalid id and path traversal
+    with pytest.raises(HTTPException) as exc:
+        _thumbnail_file("not-a-uuid", "photo.png")
+    assert exc.value.status_code == 404
+
+    with pytest.raises(HTTPException) as exc:
+        _thumbnail_file("../../etc/passwd", "photo.png")
+    assert exc.value.status_code == 404
+
+    client = TestClient(app)
+    # Non-existent UUID returns 404
+    res = client.get(f"/t/{uuid.uuid4()}/image.png")
+    assert res.status_code == 404
+
+    # Invalid ID via client returns 404
+    res_bad = client.get("/t/invalid-id/image.png")
+    assert res_bad.status_code == 404
+
+
+def test_get_thumbnail_expired_returns_404(isolate_data_dir):
+    """AC 2: GET /t/... for an expired file returns 404."""
+    file_id = str(uuid.uuid4())
+    filename = "expired.png"
+    file_path = isolate_data_dir / file_id
+    meta_path = isolate_data_dir / f"{file_id}.meta.json"
+
+    img = Image.new("RGB", (100, 100), color=(10, 20, 30))
+    img.save(file_path, format="PNG")
+
+    meta = FileMetadata(
+        file_id=file_id,
+        filename=filename,
+        ttl=60,
+        created_at=time.time() - 120,  # expired 60s ago
+    )
+    meta.save(meta_path)
+
+    client = TestClient(app)
+    res = client.get(f"/t/{file_id}/{filename}")
+    assert res.status_code == 404
+
+
+def test_get_thumbnail_fallback_when_generation_fails(isolate_data_dir):
+    """AC 2: When generate_thumbnail fails, serve the original file as fallback without breaking."""
+    file_id = str(uuid.uuid4())
+    filename = "corrupted.png"
+    file_path = isolate_data_dir / file_id
+    meta_path = isolate_data_dir / f"{file_id}.meta.json"
+
+    original_bytes = b"corrupted image bytes that PIL cannot decode"
+    file_path.write_bytes(original_bytes)
+
+    meta = FileMetadata(
+        file_id=file_id,
+        filename=filename,
+        ttl=3600,
+        created_at=time.time(),
+    )
+    meta.save(meta_path)
+
+    client = TestClient(app)
+    res = client.get(f"/t/{file_id}/{filename}")
+    assert res.status_code == 200
+    assert res.content == original_bytes
+
+
+def test_frontend_file_thumb_src_uses_route_t():
+    """AC 4: In HTML_TEMPLATE, img.file-thumb src replaces /d/ with /t/."""
+    # Matches f.url.replace('/d/', '/t/') or similar
+    assert 'replace("/d/", "/t/")' in HTML_TEMPLATE or "replace('/d/', '/t/')" in HTML_TEMPLATE
+    # Ensure original f.url is NOT used directly as thumb src
+    assert '<img class="file-thumb" src="${esc(f.url)}"' not in HTML_TEMPLATE
+
+
+def test_generate_thumbnail_uses_temp_file_and_leaves_no_tmp_leftover(tmp_path, monkeypatch):
+    """AC 1 & 2: generate_thumbnail writes to a unique temporary file and replaces atomically.
+    No .tmp-* files remain after successful generation.
+    """
+    src = tmp_path / "original.png"
+    thumb = tmp_path / "original.thumb.jpg"
+    img = Image.new("RGB", (300, 300), color="green")
+    img.save(src, format="PNG")
+
+    saved_targets = []
+    real_save = Image.Image.save
+
+    def spy_save(self, fp, *args, **kwargs):
+        saved_targets.append(str(fp))
+        return real_save(self, fp, *args, **kwargs)
+
+    monkeypatch.setattr(Image.Image, "save", spy_save)
+
+    success = generate_thumbnail(src, thumb, max_size=150)
+    assert success is True
+    assert thumb.exists()
+
+    # The save target was a temporary file, not the final thumb path
+    assert len(saved_targets) == 1
+    assert ".tmp-" in saved_targets[0]
+    assert saved_targets[0] != str(thumb)
+
+    # No .tmp-* files remain in the directory
+    tmp_files = [f for f in tmp_path.iterdir() if ".tmp-" in f.name]
+    assert len(tmp_files) == 0
+
+
+def test_thumbnail_failure_preserves_existing_thumb_and_cleans_only_own_tmp(tmp_path, monkeypatch):
+    """AC 2: Failure during thumbnail generation does not delete an already-existing thumb_path,
+    and cleans up only the temporary file created by that run.
+    """
+    src = tmp_path / "image.png"
+    thumb = tmp_path / "image.thumb.jpg"
+    img = Image.new("RGB", (100, 100), color="blue")
+    img.save(src, format="PNG")
+
+    # Pre-create a valid existing thumbnail
+    thumb.write_bytes(b"pre-existing valid thumbnail content")
+
+    # Simulate failure during generation where a temporary file was written
+    save_called = False
+
+    def failing_save(self, fp, *args, **kwargs):
+        nonlocal save_called
+        save_called = True
+        Path(fp).write_bytes(b"partial temp content")
+        raise RuntimeError("Simulated crash during save")
+
+    monkeypatch.setattr(Image.Image, "save", failing_save)
+
+    success = generate_thumbnail(src, thumb, max_size=50)
+    assert success is False
+    assert save_called is True
+
+    # The existing thumbnail MUST still exist and be intact
+    assert thumb.exists()
+    assert thumb.read_bytes() == b"pre-existing valid thumbnail content"
+
+    # Any temp file created by this run must be cleaned up
+    tmp_files = [f for f in tmp_path.iterdir() if ".tmp-" in f.name]
+    assert len(tmp_files) == 0
+
+
+def test_thumbnail_canonical_uuid_form(isolate_data_dir):
+    """AC 3: thumb_path uses canonical UUID form, even when requested with non-canonical (e.g. uppercase) file_id.
+    Deletion via non-canonical ID also removes the canonical thumb_path.
+    """
+    raw_uuid = uuid.uuid4()
+    canonical_id = str(raw_uuid).lower()
+    upper_id = str(raw_uuid).upper()
+    filename = "test.png"
+
+    file_path = isolate_data_dir / canonical_id
+    meta_path = isolate_data_dir / f"{canonical_id}.meta.json"
+    canonical_thumb = isolate_data_dir / f"{canonical_id}.thumb.jpg"
+    upper_thumb = isolate_data_dir / f"{upper_id}.thumb.jpg"
+
+    img = Image.new("RGB", (200, 200), color="yellow")
+    img.save(file_path, format="PNG")
+
+    meta = FileMetadata(
+        file_id=canonical_id,
+        filename=filename,
+        ttl=3600,
+        created_at=time.time(),
+    )
+    meta.save(meta_path)
+
+    client = TestClient(app)
+
+    # Request thumbnail using UPPERCASE file_id
+    res = client.get(f"/t/{upper_id}/{filename}")
+    assert res.status_code == 200
+
+    # Thumbnail must be generated using CANONICAL ID, not uppercase ID
+    assert canonical_thumb.exists()
+    assert not upper_thumb.exists()
+
+    # Deleting using UPPERCASE ID must delete the canonical thumbnail
+    deleted = delete_file_by_id(upper_id)
+    assert deleted is True
+    assert not canonical_thumb.exists()
+
+
+def test_generate_thumbnail_exif_orientation_transposed(tmp_path):
+    """AC 4: generate_thumbnail applies EXIF orientation (e.g. orientation 6 = 90 deg CW rotation).
+    The resulting thumbnail has post-rotation dimensions (width/height swapped).
+    """
+    src = tmp_path / "exif_photo.jpg"
+    thumb = tmp_path / "exif_photo.thumb.jpg"
+
+    # Create 600x300 image with EXIF orientation 6 (90 degrees CW)
+    img = Image.new("RGB", (600, 300), color="purple")
+    exif = img.getexif()
+    exif[0x0112] = 6  # Orientation tag
+    img.save(src, format="JPEG", exif=exif)
+
+    success = generate_thumbnail(src, thumb, max_size=200)
+    assert success is True
+    assert thumb.exists()
+
+    with Image.open(thumb) as thumb_img:
+        # Without exif_transpose: 600x300 resized to fit 200x200 would be (200, 100).
+        # With exif_transpose: image is transposed to 300x600, resized to fit 200x200 it becomes (100, 200).
+        assert thumb_img.size == (100, 200)
+
+
+def test_thumbnail_generation_failure_logs_event(isolate_data_dir, monkeypatch):
+    """AC 5: When generate_thumbnail fails, log_event('thumbnail_generation_failed', file_id=..., reason=...) is called."""
+    file_id = str(uuid.uuid4())
+    filename = "bad.png"
+    file_path = isolate_data_dir / file_id
+    meta_path = isolate_data_dir / f"{file_id}.meta.json"
+
+    file_path.write_bytes(b"corrupted image content")
+    meta = FileMetadata(
+        file_id=file_id,
+        filename=filename,
+        ttl=3600,
+        created_at=time.time(),
+    )
+    meta.save(meta_path)
+
+    events_logged = []
+    real_log_event = app_module.log_event
+
+    def spy_log_event(event, **fields):
+        events_logged.append((event, fields))
+        return real_log_event(event, **fields)
+
+    monkeypatch.setattr(app_module, "log_event", spy_log_event)
+
+    client = TestClient(app)
+    res = client.get(f"/t/{file_id}/{filename}")
+    assert res.status_code == 200
+
+    # Verify log_event was called with 'thumbnail_generation_failed'
+    fail_events = [fields for event, fields in events_logged if event == "thumbnail_generation_failed"]
+    assert len(fail_events) == 1
+    assert fail_events[0]["file_id"] == file_id
+    assert "reason" in fail_events[0]
+
+
+def test_lazy_expiry_in_download_and_view_cleans_thumbnail(isolate_data_dir):
+    """AC 6: Hitting GET /d/... or GET /v/... on an expired file removes .thumb.jpg along with original and meta."""
+    client = TestClient(app)
+
+    for route_prefix in ("/d", "/v"):
+        file_id = str(uuid.uuid4())
+        filename = "photo.png"
+        file_path = isolate_data_dir / file_id
+        meta_path = isolate_data_dir / f"{file_id}.meta.json"
+        thumb_path = isolate_data_dir / f"{file_id}.thumb.jpg"
+
+        # Create original image and pre-generate thumbnail
+        img = Image.new("RGB", (100, 100), color="red")
+        img.save(file_path, format="PNG")
+        thumb_path.write_bytes(b"dummy thumbnail bytes")
+
+        # Expired metadata
+        meta = FileMetadata(
+            file_id=file_id,
+            filename=filename,
+            ttl=60,
+            created_at=time.time() - 120,
+        )
+        meta.save(meta_path)
+
+        assert file_path.exists()
+        assert meta_path.exists()
+        assert thumb_path.exists()
+
+        # Trigger lazy expiry
+        res = client.get(f"{route_prefix}/{file_id}/{filename}")
+        assert res.status_code == 404
+
+        # Original, metadata AND thumbnail must all be cleaned up
+        assert not file_path.exists()
+        assert not meta_path.exists()
+        assert not thumb_path.exists(), f"Thumbnail was not cleaned up on {route_prefix} lazy-expiry"
+
+
+def test_thumbnail_second_attempt_uses_fail_cache(isolate_data_dir, monkeypatch):
+    """AC 2: A second attempt to generate thumbnail for a file that already failed before
+    (marker .thumb.fail present) does NOT call generate_thumbnail again and serves the original file directly.
+    """
+    file_id = str(uuid.uuid4())
+    filename = "vector.svg"
+    file_path = isolate_data_dir / file_id
+    meta_path = isolate_data_dir / f"{file_id}.meta.json"
+    fail_marker = isolate_data_dir / f"{file_id}.thumb.fail"
+    thumb_path = isolate_data_dir / f"{file_id}.thumb.jpg"
+
+    original_content = b"<svg><circle cx='50' cy='50' r='40'/></svg>"
+    file_path.write_bytes(original_content)
+    meta = FileMetadata(
+        file_id=file_id,
+        filename=filename,
+        ttl=3600,
+        created_at=time.time(),
+    )
+    meta.save(meta_path)
+
+    client = TestClient(app)
+
+    # First attempt: generation fails because SVG cannot be decoded by PIL
+    res1 = client.get(f"/t/{file_id}/{filename}")
+    assert res1.status_code == 200
+    assert res1.content == original_content
+    # Marker .thumb.fail must be created, and .thumb.jpg must not exist
+    assert fail_marker.exists()
+    assert not thumb_path.exists()
+
+    # Spy/mock generate_thumbnail to verify call_count
+    call_count = 0
+    real_generate_thumbnail = app_module.generate_thumbnail
+
+    def mock_generate_thumbnail(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return real_generate_thumbnail(*args, **kwargs)
+
+    monkeypatch.setattr(app_module, "generate_thumbnail", mock_generate_thumbnail)
+
+    # Second attempt: with .thumb.fail present, generate_thumbnail must NOT be called
+    res2 = client.get(f"/t/{file_id}/{filename}")
+    assert res2.status_code == 200
+    assert res2.content == original_content
+    assert call_count == 0
+
+
+def test_delete_thumbnail_removes_jpg_and_fail_marker(isolate_data_dir):
+    """AC 3: _delete_thumbnail removes both .thumb.jpg and .thumb.fail when present,
+    and raises no exception when neither exists.
+    """
+    file_id = str(uuid.uuid4())
+    thumb_path = isolate_data_dir / f"{file_id}.thumb.jpg"
+    fail_path = isolate_data_dir / f"{file_id}.thumb.fail"
+
+    # Case 1: Neither exists - must execute silently without raising any exception
+    _delete_thumbnail(file_id)
+
+    # Case 2: Both exist - must remove both
+    thumb_path.write_bytes(b"jpeg-bytes")
+    fail_path.write_bytes(b"")
+    assert thumb_path.exists()
+    assert fail_path.exists()
+
+    _delete_thumbnail(file_id)
+    assert not thumb_path.exists()
+    assert not fail_path.exists()
+
+    # Case 3: Only .thumb.jpg exists
+    thumb_path.write_bytes(b"jpeg-bytes")
+    assert thumb_path.exists()
+    _delete_thumbnail(file_id)
+    assert not thumb_path.exists()
+
+    # Case 4: Only .thumb.fail exists
+    fail_path.write_bytes(b"")
+    assert fail_path.exists()
+    _delete_thumbnail(file_id)
+    assert not fail_path.exists()
+
+
+def test_delete_thumbnail_logs_unexpected_exceptions(isolate_data_dir, monkeypatch):
+    """_delete_thumbnail catches FileNotFoundError silently, but logs any other exception via log_event."""
+    file_id = str(uuid.uuid4())
+    thumb_path = isolate_data_dir / f"{file_id}.thumb.jpg"
+    thumb_path.write_bytes(b"content")
+
+    events = []
+    real_log = app_module.log_event
+
+    def spy_log(event, **kw):
+        events.append((event, kw))
+        return real_log(event, **kw)
+
+    monkeypatch.setattr(app_module, "log_event", spy_log)
+
+    def mock_unlink(self, *args, **kwargs):
+        raise OSError("Simulated disk error")
+
+    monkeypatch.setattr("pathlib.Path.unlink", mock_unlink)
+
+    # Must not raise, but must log event
+    _delete_thumbnail(file_id)
+    fail_events = [kw for ev, kw in events if ev == "thumbnail_delete_failed"]
+    assert len(fail_events) >= 1
+    assert fail_events[0]["file_id"] == file_id
+    assert "Simulated disk error" in fail_events[0]["error"]
+
+
+def test_thumbnail_generation_failure_logs_real_error_details(isolate_data_dir, monkeypatch):
+    """AC 4: log_event for thumbnail generation failure includes real error details,
+    not just fixed string 'unsupported_format'.
+    """
+    file_id = str(uuid.uuid4())
+    filename = "unsupported.png"
+    file_path = isolate_data_dir / file_id
+    meta_path = isolate_data_dir / f"{file_id}.meta.json"
+
+    file_path.write_bytes(b"this is corrupt binary payload not an image")
+    meta = FileMetadata(
+        file_id=file_id,
+        filename=filename,
+        ttl=3600,
+        created_at=time.time(),
+    )
+    meta.save(meta_path)
+
+    events_logged = []
+    real_log_event = app_module.log_event
+
+    def spy_log_event(event, **fields):
+        events_logged.append((event, fields))
+        return real_log_event(event, **fields)
+
+    monkeypatch.setattr(app_module, "log_event", spy_log_event)
+
+    client = TestClient(app)
+    res = client.get(f"/t/{file_id}/{filename}")
+    assert res.status_code == 200
+
+    fail_events = [fields for event, fields in events_logged if event == "thumbnail_generation_failed"]
+    assert len(fail_events) == 1
+    event = fail_events[0]
+    assert event["file_id"] == file_id
+    # Must NOT be the old generic fixed string "unsupported_format"
+    assert event.get("reason") != "unsupported_format"
+    # Must include real error details from PIL exception (e.g. "cannot identify image file")
+    error_text = event.get("error", "") or event.get("reason", "")
+    assert "cannot identify image file" in error_text.lower()
+
+
 
 
 
