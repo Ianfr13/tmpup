@@ -7,6 +7,7 @@ import base64
 from contextlib import AsyncExitStack
 import html
 import json
+import math
 import mimetypes
 import os
 import threading
@@ -239,6 +240,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .file-thumb{width:44px;height:44px;object-fit:cover;border-radius:8px;flex-shrink:0;border:1px solid #333;background:#262626}
   .empty-state{text-align:center;color:#525252;padding:32px;font-size:.9rem}
 
+  .pagination{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:20px;padding:8px 0}
+  .page-btn{background:#262626;border:1px solid #333;border-radius:8px;padding:8px 16px;color:#e5e5e5;cursor:pointer;font-size:.85rem;transition:all .15s}
+  .page-btn:hover:not(:disabled){background:#333;border-color:#444}
+  .page-btn:disabled{opacity:0.35;cursor:not-allowed}
+  .page-info{font-size:.85rem;color:#888}
+
   @media(max-width:480px){
     .dropzone{padding:32px 16px}
     .file-card{flex-direction:column;align-items:flex-start;gap:8px}
@@ -334,6 +341,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       Arquivos enviados
     </h2>
     <div id="fileList"></div>
+    <div class="pagination" id="pagination">
+      <button class="page-btn" id="prevPageBtn" disabled>&larr; Anterior</button>
+      <span class="page-info" id="pageInfo">Pagina 1 de 1 (0 arquivos)</span>
+      <button class="page-btn" id="nextPageBtn" disabled>Proxima &rarr;</button>
+    </div>
   </div>
 </div>
 
@@ -357,15 +369,24 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   const sortSelect = document.getElementById('sortSelect');
   const bulkBar = document.getElementById('bulkBar');
   const bulkCount = document.getElementById('bulkCount');
+  const prevPageBtn = document.getElementById('prevPageBtn');
+  const nextPageBtn = document.getElementById('nextPageBtn');
+  const pageInfo = document.getElementById('pageInfo');
 
   let selectedFiles = [];
-  let allFiles = [];          // raw list from GET /api/files
+  let displayedFiles = [];    // items of current page (max 50)
+  let currentSummary = { total: 0, total_size_bytes: 0, expiring_soon_count: 0 };
+  let currentPage = 1;
+  let totalPages = 1;
+  let totalFiles = 0;
   let currentFilter = 'all';
   let currentQuery = '';
   let currentSort = 'date';
   let selectedIds = new Set();
   let confirmingId = null;    // delete confirm state
   let renewingId = null;      // renew popover state
+  let searchDebounceTimer = null;
+  let loadFilesRequestId = 0;
 
   // --- Drag & Drop ---
   ['dragenter','dragover'].forEach(e => dropzone.addEventListener(e, ev => { ev.preventDefault(); dropzone.classList.add('dragover'); }));
@@ -453,61 +474,69 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
   // --- File list (from real API) ---
   async function loadFiles() {
+    const requestId = ++loadFilesRequestId;
     try {
-      const res = await fetch('/api/files');
+      const params = new URLSearchParams({
+        page: currentPage,
+        q: currentQuery.trim(),
+        kind: currentFilter,
+        sort: currentSort,
+      });
+      const res = await fetch(`/api/files?${params.toString()}`);
+      if(requestId !== loadFilesRequestId) return;
       if(!res.ok) {
         fileList.innerHTML = '<div class="empty-state">Erro ao carregar arquivos</div>';
         return;
       }
       const data = await res.json();
-      if(!Array.isArray(data)) {
+      if(requestId !== loadFilesRequestId) return;
+      if(!data || !Array.isArray(data.items)) {
         fileList.innerHTML = '<div class="empty-state">Erro ao carregar arquivos</div>';
         return;
       }
-      allFiles = data;
+      const totalPagesReceived = data.total_pages || 0;
+      const validPage = totalPagesReceived === 0 ? 1 : Math.min(currentPage, totalPagesReceived);
+      if(currentPage > validPage) {
+        currentPage = validPage;
+        return loadFiles();
+      }
+      displayedFiles = data.items;
+      currentPage = data.page || validPage;
+      totalPages = totalPagesReceived;
+      totalFiles = data.total || 0;
+      currentSummary = {
+        total: data.total || 0,
+        total_size_bytes: data.total_size_bytes || 0,
+        expiring_soon_count: data.expiring_soon_count || 0,
+      };
       render();
     } catch(e) {
+      if(requestId !== loadFilesRequestId) return;
       fileList.innerHTML = '<div class="empty-state">Erro ao carregar arquivos</div>';
     }
   }
 
-  function fileKind(filename) {
-    const ext = (filename.split('.').pop() || '').toLowerCase();
-    if(['png','jpg','jpeg','gif','webp','svg','bmp','avif'].includes(ext)) return 'image';
-    if(['pdf','doc','docx','txt'].includes(ext)) return 'document';
-    if(['mp4','mov','avi','mkv','webm'].includes(ext)) return 'video';
-    return 'archive'; // catch-all "Outros"
-  }
-
   function render() {
     renderSummary();
-    const q = currentQuery.trim().toLowerCase();
-    let items = allFiles.filter(f => {
-      const kind = fileKind(f.filename);
-      const matchesFilter = currentFilter === 'all' || kind === currentFilter;
-      const matchesQuery = !q || f.filename.toLowerCase().includes(q);
-      return matchesFilter && matchesQuery;
-    });
-    items = items.slice().sort((a, b) => {
-      if(currentSort === 'name') return a.filename.localeCompare(b.filename);
-      if(currentSort === 'size') return (b.size_bytes||0) - (a.size_bytes||0);
-      if(currentSort === 'expiry') {
-        const ra = a.expires_in < 0 ? Infinity : a.expires_in;
-        const rb = b.expires_in < 0 ? Infinity : b.expires_in;
-        return ra - rb;
-      }
-      return b.created_at - a.created_at;
-    });
-    renderFiles(items);
+    renderFiles(displayedFiles);
+    renderPagination();
     renderBulkBar();
   }
 
   function renderSummary() {
-    const totalSize = allFiles.reduce((sum, f) => sum + (f.size_bytes || 0), 0);
-    const expiringSoon = allFiles.filter(f => f.expires_in >= 0 && f.expires_in < 3600).length;
-    let html = `<strong>${allFiles.length}</strong> arquivos &middot; ${formatSize(totalSize)}`;
+    const total = currentSummary.total;
+    const totalSize = currentSummary.total_size_bytes;
+    const expiringSoon = currentSummary.expiring_soon_count;
+    let html = `<strong>${total}</strong> arquivos &middot; ${formatSize(totalSize)}`;
     if(expiringSoon > 0) html += ` &middot; <span class="summary-warn">${expiringSoon} expira(m) em breve</span>`;
     summaryBar.innerHTML = html;
+  }
+
+  function renderPagination() {
+    const displayTotalPages = Math.max(1, totalPages);
+    pageInfo.textContent = `Pagina ${currentPage} de ${displayTotalPages} (${totalFiles} arquivos)`;
+    prevPageBtn.disabled = currentPage <= 1;
+    nextPageBtn.disabled = currentPage >= totalPages || totalPages === 0;
   }
 
   function renderFiles(items) {
@@ -622,15 +651,45 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   });
 
   // --- Filters / search / sort ---
-  searchInput.addEventListener('input', () => { currentQuery = searchInput.value; render(); });
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      currentQuery = searchInput.value;
+      currentPage = 1;
+      loadFiles();
+    }, 300);
+  });
   chipRow.addEventListener('click', ev => {
     const chip = ev.target.closest('.chip');
     if(!chip) return;
+    clearTimeout(searchDebounceTimer);
+    currentQuery = searchInput.value;
     currentFilter = chip.dataset.kind;
     chipRow.querySelectorAll('.chip').forEach(c => c.classList.toggle('active', c === chip));
-    render();
+    currentPage = 1;
+    loadFiles();
   });
-  sortSelect.addEventListener('change', () => { currentSort = sortSelect.value; render(); });
+  sortSelect.addEventListener('change', () => {
+    clearTimeout(searchDebounceTimer);
+    currentQuery = searchInput.value;
+    currentSort = sortSelect.value;
+    currentPage = 1;
+    loadFiles();
+  });
+
+  // --- Pagination controls ---
+  prevPageBtn.addEventListener('click', () => {
+    if(currentPage > 1) {
+      currentPage--;
+      loadFiles();
+    }
+  });
+  nextPageBtn.addEventListener('click', () => {
+    if(currentPage < totalPages) {
+      currentPage++;
+      loadFiles();
+    }
+  });
 
   // --- Bulk actions ---
   document.getElementById('bulkCancelBtn').addEventListener('click', () => { selectedIds.clear(); render(); });
@@ -1169,10 +1228,58 @@ async def health_check():
     return {"status": "ok"}
 
 
+PAGE_SIZE = 50
+
+
 @app.get("/api/files")
-async def api_list_files():
-    """List active (non-expired) files with metadata"""
-    return await run_in_threadpool(_list_active_files)
+async def api_list_files(
+    page: int = 1,
+    q: Optional[str] = None,
+    kind: str = "all",
+    sort: str = "date",
+):
+    """List active (non-expired) files with metadata, filtered and paginated."""
+    all_files = await run_in_threadpool(_list_active_files)
+
+    items = list(all_files)
+    target_kind = (kind or "all").strip().lower()
+    if target_kind != "all":
+        items = [f for f in items if file_kind(f.get("filename", "")) == target_kind]
+
+    if q:
+        query = q.strip().lower()
+        if query:
+            items = [f for f in items if query in f.get("filename", "").lower()]
+
+    sort_key = (sort or "date").strip().lower()
+    if sort_key == "name":
+        items.sort(key=lambda x: x.get("filename", "").lower())
+    elif sort_key == "size":
+        items.sort(key=lambda x: x.get("size_bytes", 0) or 0, reverse=True)
+    elif sort_key == "expiry":
+        items.sort(key=lambda x: float("inf") if x.get("expires_in", -1) < 0 else x.get("expires_in", 0))
+    else:
+        items.sort(key=lambda x: x.get("created_at", 0) or 0, reverse=True)
+
+    total = len(items)
+    total_pages = math.ceil(total / PAGE_SIZE)
+    total_size_bytes = sum(f.get("size_bytes", 0) or 0 for f in items)
+    expiring_soon_count = sum(1 for f in items if 0 <= f.get("expires_in", -1) < 3600)
+
+    p = max(1, page)
+    start = (p - 1) * PAGE_SIZE
+    end = start + PAGE_SIZE
+    page_items = items[start:end]
+
+    return {
+        "items": page_items,
+        "total": total,
+        "page": p,
+        "page_size": PAGE_SIZE,
+        "total_pages": total_pages,
+        "total_size_bytes": total_size_bytes,
+        "expiring_soon_count": expiring_soon_count,
+    }
 
 
 @app.get("/api/files/{file_id}")
@@ -1489,11 +1596,24 @@ VIEWER_TEMPLATE = """<!DOCTYPE html>
 
 
 IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "tiff", "avif"}
+DOC_EXTENSIONS = {"pdf", "doc", "docx", "txt"}
+VIDEO_EXTENSIONS = {"mp4", "mov", "avi", "mkv", "webm"}
 
 
 def is_image_file(filename: str) -> bool:
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     return ext in IMAGE_EXTENSIONS
+
+
+def file_kind(filename: str) -> str:
+    if is_image_file(filename):
+        return "image"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext in DOC_EXTENSIONS:
+        return "document"
+    if ext in VIDEO_EXTENSIONS:
+        return "video"
+    return "archive"
 
 
 def generate_thumbnail(

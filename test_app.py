@@ -584,7 +584,7 @@ def test_existing_routes_regression(auth_client, isolate_data_dir):
     # 7. GET /api/files
     res = auth_client.get("/api/files")
     assert res.status_code == 200
-    files = res.json()
+    files = res.json()["items"]
     assert len(files) >= 1
     assert any(f["id"] == file_id for f in files)
 
@@ -1019,7 +1019,7 @@ def test_rest_endpoints_return_new_metadata_fields(auth_client, isolate_data_dir
     # 2. GET /api/files
     res_list = auth_client.get("/api/files")
     assert res_list.status_code == 200
-    files = res_list.json()
+    files = res_list.json()["items"]
     item = next(f for f in files if f["id"] == file_id)
     assert expected_fields.issubset(item.keys())
     assert item["size_bytes"] == len(content)
@@ -1285,9 +1285,9 @@ def test_frontend_review_fixes_elements_and_handlers(auth_client, isolate_data_d
     # AC 7: <label for='ttlSelect'>
     assert '<label for="ttlSelect">' in main_html
 
-    # AC 8: loadFiles checks res.ok and Array.isArray
+    # AC 8: loadFiles checks res.ok and Array.isArray(data.items)
     assert "if(!res.ok)" in main_html or "if (!res.ok)" in main_html
-    assert "Array.isArray(data)" in main_html
+    assert "Array.isArray(data.items)" in main_html
 
     # AC 4: bulk actions check response.ok and count actual successes/failures
     assert "successCount" in main_html
@@ -1902,10 +1902,349 @@ def test_thumbnail_generation_failure_logs_real_error_details(isolate_data_dir, 
     assert "cannot identify image file" in error_text.lower()
 
 
+def test_api_files_pagination_defaults_more_than_50(auth_client, isolate_data_dir):
+    """GET /api/files without params returns at most 50 items with total, page, page_size, and total_pages."""
+    base_time = time.time()
+    for i in range(55):
+        fid = f"file-{i:03d}"
+        meta = FileMetadata(
+            file_id=fid,
+            filename=f"test_{i:03d}.txt",
+            ttl=86400,
+            created_at=base_time + i,
+            size_bytes=100 + i,
+        )
+        meta.save(isolate_data_dir / f"{fid}.meta.json")
+        (isolate_data_dir / fid).write_bytes(b"x" * (100 + i))
+
+    res = auth_client.get("/api/files")
+    assert res.status_code == 200
+    data = res.json()
+    assert isinstance(data, dict)
+    assert len(data["items"]) == 50
+    assert data["total"] == 55
+    assert data["page"] == 1
+    assert data["page_size"] == 50
+    assert data["total_pages"] == 2
 
 
+def test_api_files_pagination_page_2(auth_client, isolate_data_dir):
+    """GET /api/files?page=2 returns the next page of items with correct metadata."""
+    base_time = time.time()
+    for i in range(75):
+        fid = f"file-{i:03d}"
+        meta = FileMetadata(
+            file_id=fid,
+            filename=f"file_{i:03d}.txt",
+            ttl=86400,
+            created_at=base_time + i,
+            size_bytes=10,
+        )
+        meta.save(isolate_data_dir / f"{fid}.meta.json")
+        (isolate_data_dir / fid).write_bytes(b"content")
+
+    res_p1 = auth_client.get("/api/files?page=1")
+    assert res_p1.status_code == 200
+    p1 = res_p1.json()
+    assert len(p1["items"]) == 50
+    assert p1["page"] == 1
+    assert p1["total"] == 75
+    assert p1["total_pages"] == 2
+
+    res_p2 = auth_client.get("/api/files?page=2")
+    assert res_p2.status_code == 200
+    p2 = res_p2.json()
+    assert len(p2["items"]) == 25
+    assert p2["page"] == 2
+    assert p2["total"] == 75
+    assert p2["total_pages"] == 2
+
+    p1_ids = {item["id"] for item in p1["items"]}
+    p2_ids = {item["id"] for item in p2["items"]}
+    assert p1_ids.isdisjoint(p2_ids)
+    assert len(p1_ids | p2_ids) == 75
 
 
+def test_api_files_filter_by_query_q(auth_client, isolate_data_dir):
+    """GET /api/files?q=term filters by filename substring (case-insensitive) before paginating."""
+    base_time = time.time()
+    for i in range(60):
+        fid = f"rep-{i:03d}"
+        meta = FileMetadata(
+            file_id=fid,
+            filename=f"Monthly_Report_{i:03d}.pdf",
+            ttl=86400,
+            created_at=base_time + i,
+            size_bytes=50,
+        )
+        meta.save(isolate_data_dir / f"{fid}.meta.json")
+        (isolate_data_dir / fid).write_bytes(b"report-content")
+
+    for i in range(20):
+        fid = f"other-{i:03d}"
+        meta = FileMetadata(
+            file_id=fid,
+            filename=f"holiday_photo_{i:03d}.jpg",
+            ttl=86400,
+            created_at=base_time + 100 + i,
+            size_bytes=80,
+        )
+        meta.save(isolate_data_dir / f"{fid}.meta.json")
+        (isolate_data_dir / fid).write_bytes(b"photo-content")
+
+    res = auth_client.get("/api/files?q=REPORT")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total"] == 60
+    assert len(data["items"]) == 50
+    assert data["total_pages"] == 2
+    assert all("report" in item["filename"].lower() for item in data["items"])
+
+    res_p2 = auth_client.get("/api/files?q=report&page=2")
+    assert res_p2.status_code == 200
+    data_p2 = res_p2.json()
+    assert data_p2["total"] == 60
+    assert len(data_p2["items"]) == 10
+    assert data_p2["page"] == 2
+    assert all("report" in item["filename"].lower() for item in data_p2["items"])
 
 
+def test_api_files_filter_by_kind(auth_client, isolate_data_dir):
+    """GET /api/files?kind=... filters files by file category."""
+    files_to_create = [
+        ("img1.png", 10),
+        ("img2.jpg", 10),
+        ("img3.webp", 10),
+        ("doc1.pdf", 10),
+        ("doc2.docx", 10),
+        ("doc3.txt", 10),
+        ("vid1.mp4", 10),
+        ("vid2.webm", 10),
+        ("arc1.zip", 10),
+        ("arc2.tar.gz", 10),
+    ]
+    base_time = time.time()
+    for idx, (fname, sz) in enumerate(files_to_create):
+        fid = f"kind-test-{idx}"
+        meta = FileMetadata(
+            file_id=fid,
+            filename=fname,
+            ttl=86400,
+            created_at=base_time + idx,
+            size_bytes=sz,
+        )
+        meta.save(isolate_data_dir / f"{fid}.meta.json")
+        (isolate_data_dir / fid).write_bytes(b"x" * sz)
+
+    # Kind image
+    res = auth_client.get("/api/files?kind=image")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total"] == 3
+    assert len(data["items"]) == 3
+    assert {f["filename"] for f in data["items"]} == {"img1.png", "img2.jpg", "img3.webp"}
+
+    # Kind document
+    res_doc = auth_client.get("/api/files?kind=document")
+    assert res_doc.status_code == 200
+    data_doc = res_doc.json()
+    assert data_doc["total"] == 3
+    assert {f["filename"] for f in data_doc["items"]} == {"doc1.pdf", "doc2.docx", "doc3.txt"}
+
+    # Kind video
+    res_vid = auth_client.get("/api/files?kind=video")
+    assert res_vid.status_code == 200
+    data_vid = res_vid.json()
+    assert data_vid["total"] == 2
+    assert {f["filename"] for f in data_vid["items"]} == {"vid1.mp4", "vid2.webm"}
+
+    # Kind archive (catch-all for other extensions)
+    res_arc = auth_client.get("/api/files?kind=archive")
+    assert res_arc.status_code == 200
+    data_arc = res_arc.json()
+    assert data_arc["total"] == 2
+    assert {f["filename"] for f in data_arc["items"]} == {"arc1.zip", "arc2.tar.gz"}
+
+
+def test_api_files_sort_name_and_size_and_expiry(auth_client, isolate_data_dir):
+    """GET /api/files?sort=... correctly sorts by name, size, expiry, and date."""
+    now = time.time()
+    # file A: name="Zeta.txt", size=500, expires in 200s (ttl=200, created=now)
+    meta_a = FileMetadata("id-a", "Zeta.txt", 200, now, size_bytes=500)
+    meta_a.save(isolate_data_dir / "id-a.meta.json")
+    (isolate_data_dir / "id-a").write_bytes(b"a" * 500)
+
+    # file B: name="Alpha.txt", size=1000, never expires (ttl=0, created=now - 50)
+    meta_b = FileMetadata("id-b", "Alpha.txt", 0, now - 50, size_bytes=1000)
+    meta_b.save(isolate_data_dir / "id-b.meta.json")
+    (isolate_data_dir / "id-b").write_bytes(b"b" * 1000)
+
+    # file C: name="Beta.txt", size=100, expires in 50s (ttl=50, created=now)
+    meta_c = FileMetadata("id-c", "Beta.txt", 50, now, size_bytes=100)
+    meta_c.save(isolate_data_dir / "id-c.meta.json")
+    (isolate_data_dir / "id-c").write_bytes(b"c" * 100)
+
+    # Sort name: Alpha, Beta, Zeta
+    res_name = auth_client.get("/api/files?sort=name")
+    assert res_name.status_code == 200
+    names = [f["filename"] for f in res_name.json()["items"]]
+    assert names == ["Alpha.txt", "Beta.txt", "Zeta.txt"]
+
+    # Sort size: 1000 (Alpha), 500 (Zeta), 100 (Beta)
+    res_size = auth_client.get("/api/files?sort=size")
+    assert res_size.status_code == 200
+    sizes = [f["size_bytes"] for f in res_size.json()["items"]]
+    assert sizes == [1000, 500, 100]
+
+    # Sort expiry: Beta (50s), Zeta (200s), Alpha (never expires: -1 at end)
+    res_exp = auth_client.get("/api/files?sort=expiry")
+    assert res_exp.status_code == 200
+    exp_order = [f["filename"] for f in res_exp.json()["items"]]
+    assert exp_order == ["Beta.txt", "Zeta.txt", "Alpha.txt"]
+
+
+def test_api_files_aggregates_reflect_full_filtered_set_and_mcp_unaffected(auth_client, isolate_data_dir):
+    """total_size_bytes and expiring_soon_count reflect the full filtered set (>50 items) and MCP tool list_files remains unpaginated."""
+    base_time = time.time()
+    # Create 60 image files (each 100 bytes):
+    # 30 expiring soon (ttl=1800) and 30 never expiring (ttl=0)
+    for i in range(60):
+        fid = f"img-{i:03d}"
+        ttl = 1800 if i < 30 else 0
+        meta = FileMetadata(
+            file_id=fid,
+            filename=f"photo_{i:03d}.png",
+            ttl=ttl,
+            created_at=base_time + i,
+            size_bytes=100,
+        )
+        meta.save(isolate_data_dir / f"{fid}.meta.json")
+        (isolate_data_dir / fid).write_bytes(b"x" * 100)
+
+    # Create 10 non-image files (each 200 bytes, ttl=1800)
+    for i in range(10):
+        fid = f"txt-{i:03d}"
+        meta = FileMetadata(
+            file_id=fid,
+            filename=f"doc_{i:03d}.txt",
+            ttl=1800,
+            created_at=base_time + 100 + i,
+            size_bytes=200,
+        )
+        meta.save(isolate_data_dir / f"{fid}.meta.json")
+        (isolate_data_dir / fid).write_bytes(b"y" * 200)
+
+    # 1. Check page 1 with kind=image filter
+    res_p1 = auth_client.get("/api/files?kind=image&page=1")
+    assert res_p1.status_code == 200
+    data_p1 = res_p1.json()
+    assert len(data_p1["items"]) == 50
+    assert data_p1["total"] == 60
+    assert data_p1["page"] == 1
+    assert data_p1["page_size"] == 50
+    assert data_p1["total_pages"] == 2
+    # Full filtered set: 60 images * 100 bytes = 6000 bytes (not just 50 * 100)
+    assert data_p1["total_size_bytes"] == 6000
+    # Full filtered set: 30 expiring soon images (not just those in page 1)
+    assert data_p1["expiring_soon_count"] == 30
+
+    # 2. Check page 2 with kind=image filter
+    res_p2 = auth_client.get("/api/files?kind=image&page=2")
+    assert res_p2.status_code == 200
+    data_p2 = res_p2.json()
+    assert len(data_p2["items"]) == 10
+    assert data_p2["total"] == 60
+    assert data_p2["page"] == 2
+    assert data_p2["total_size_bytes"] == 6000
+    assert data_p2["expiring_soon_count"] == 30
+
+    # 3. Check MCP list_files() returns full unpaginated list (70 files)
+    mcp_files = list_files()
+    assert isinstance(mcp_files, list)
+    assert len(mcp_files) == 70
+    assert all("id" in f and "filename" in f for f in mcp_files)
+
+
+def test_html_template_pagination_logic():
+    """AC 3: HTML_TEMPLATE contains pagination UI and client-side logic."""
+    # Pagination controls: Anterior and Proxima buttons
+    assert "Anterior" in HTML_TEMPLATE
+    assert "Proxima" in HTML_TEMPLATE
+    assert "prevPageBtn" in HTML_TEMPLATE
+    assert "nextPageBtn" in HTML_TEMPLATE
+
+    # Fetch with query params in loadFiles()
+    assert "/api/files?" in HTML_TEMPLATE or "URLSearchParams" in HTML_TEMPLATE
+
+    # Reset to page 1 on filter/search/sort change
+    assert "currentPage = 1" in HTML_TEMPLATE
+
+
+def test_html_template_debounce_token_and_page_clamp():
+    """AC 3: HTML_TEMPLATE contains search debounce (~300ms), request token for out-of-order protection, and currentPage clamp."""
+    # Debounce with setTimeout/clearTimeout around searchInput handler
+    assert "searchDebounceTimer" in HTML_TEMPLATE
+    assert "clearTimeout(searchDebounceTimer)" in HTML_TEMPLATE
+    assert "setTimeout" in HTML_TEMPLATE
+    assert "300" in HTML_TEMPLATE
+
+    # Request counter / token logic to drop out-of-order responses
+    assert "loadFilesRequestId" in HTML_TEMPLATE
+    assert "requestId !== loadFilesRequestId" in HTML_TEMPLATE
+
+    # currentPage clamp logic when current page exceeds total_pages
+    assert "Math.min(currentPage" in HTML_TEMPLATE
+    assert "currentPage > validPage" in HTML_TEMPLATE or "currentPage !== validPage" in HTML_TEMPLATE
+
+
+def test_expiring_soon_count_boundary_condition(auth_client, isolate_data_dir, monkeypatch):
+    """expiring_soon_count uses strictly < 3600 condition (boundary test for exactly 3600s vs 3599s)."""
+    base_time = 1_000_000.0
+    monkeypatch.setattr("time.time", lambda: base_time)
+
+    # File 1: expires in exactly 3600s -> NOT expiring soon (< 3600)
+    fid1 = "f-boundary-3600"
+    meta1 = FileMetadata(
+        file_id=fid1,
+        filename="file3600.txt",
+        ttl=3600,
+        created_at=base_time,
+        size_bytes=10,
+    )
+    meta1.save(isolate_data_dir / f"{fid1}.meta.json")
+    (isolate_data_dir / fid1).write_bytes(b"a" * 10)
+
+    # File 2: expires in 3599s -> IS expiring soon (< 3600)
+    fid2 = "f-boundary-3599"
+    meta2 = FileMetadata(
+        file_id=fid2,
+        filename="file3599.txt",
+        ttl=3600,
+        created_at=base_time - 1,
+        size_bytes=10,
+    )
+    meta2.save(isolate_data_dir / f"{fid2}.meta.json")
+    (isolate_data_dir / fid2).write_bytes(b"b" * 10)
+
+    # File 3: never expires (ttl=0, expires_in=-1)
+    fid3 = "f-boundary-never"
+    meta3 = FileMetadata(
+        file_id=fid3,
+        filename="filenever.txt",
+        ttl=0,
+        created_at=base_time,
+        size_bytes=10,
+    )
+    meta3.save(isolate_data_dir / f"{fid3}.meta.json")
+    (isolate_data_dir / fid3).write_bytes(b"c" * 10)
+
+    res = auth_client.get("/api/files")
+    assert res.status_code == 200
+    data = res.json()
+    items_by_id = {f["id"]: f for f in data["items"]}
+    assert items_by_id[fid1]["expires_in"] == 3600
+    assert items_by_id[fid2]["expires_in"] == 3599
+    assert items_by_id[fid3]["expires_in"] == -1
+    # Exactly 3600s must NOT be counted in expiring_soon_count (< 3600)
+    assert data["expiring_soon_count"] == 1
 
