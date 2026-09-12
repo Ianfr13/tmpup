@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote as urlquote, unquote, urlencode
 
+from PIL import Image, ImageOps
+
 import httpx
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -87,7 +89,7 @@ def verify_api_key(request: Request) -> Optional[str]:
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if path in PUBLIC_PATHS or path.startswith("/d/") or path.startswith("/v/"):
+        if path in PUBLIC_PATHS or path.startswith("/d/") or path.startswith("/v/") or path.startswith("/t/"):
             return await call_next(request)
 
         # 1) Tenta cookie de sessão (browser flow)
@@ -516,7 +518,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       const soon = f.expires_in >= 0 && f.expires_in < 3600;
       const created = new Date(f.created_at * 1000).toLocaleString('pt-BR', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
       const thumbOrIcon = f.is_image
-        ? `<img class="file-thumb" src="${esc(f.url)}" alt="${esc(f.filename)}" loading="lazy">`
+        ? `<img class="file-thumb" src="${esc(f.url.replace('/d/', '/t/'))}" alt="${esc(f.filename)}" loading="lazy">`
         : `<span class="file-icon">${icon}</span>`;
       const openBtn = f.is_image
         ? `<a class="btn-icon" href="${esc(f.view_url)}" target="_blank" title="Visualizar">&#128065; Ver</a>`
@@ -900,6 +902,18 @@ def _get_file_info(file_id: str) -> Optional[dict]:
     return _file_meta_dict(metadata)
 
 
+def _delete_thumbnail(canonical_file_id: str) -> None:
+    """Remove thumbnail (.thumb.jpg) and failure marker (.thumb.fail) for canonical_file_id if they exist."""
+    for suffix in (".thumb.jpg", ".thumb.fail"):
+        target = DATA_DIR / f"{canonical_file_id}{suffix}"
+        try:
+            target.unlink(missing_ok=True)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            log_event("thumbnail_delete_failed", file_id=canonical_file_id, error=str(e))
+
+
 def delete_file_by_id(file_id: str) -> bool:
     """Remove file and metadata sidecar by file ID. Returns True if deleted, False otherwise."""
     try:
@@ -912,11 +926,15 @@ def delete_file_by_id(file_id: str) -> bool:
         log_event("file_delete_failed", file_id=file_id, reason="not_found")
         return False
 
+    metadata = FileMetadata.from_file(metadata_path)
+    canonical_id = metadata.file_id if metadata else file_path.name
+
     try:
         if file_path.exists():
             file_path.unlink()
         if metadata_path.exists():
             metadata_path.unlink()
+        _delete_thumbnail(canonical_id)
     except FileNotFoundError:
         log_event("file_delete_failed", file_id=file_id, reason="not_found")
         return False
@@ -976,6 +994,7 @@ def cleanup_expired_files():
                     file_path.unlink()
                 if metadata_path.exists():
                     metadata_path.unlink()
+                _delete_thumbnail(file_id)
                 cleaned += 1
             except Exception as e:
                 print(f"Error cleaning up {file_id}: {e}")
@@ -1296,6 +1315,7 @@ def _download_file(file_id: str, filename: str = "", dl: Optional[str] = None) -
                 metadata_path.unlink()
             except FileNotFoundError:
                 pass
+        _delete_thumbnail(metadata.file_id)
         raise HTTPException(status_code=404, detail="File expired")
 
     # Verify file exists
@@ -1476,6 +1496,49 @@ def is_image_file(filename: str) -> bool:
     return ext in IMAGE_EXTENSIONS
 
 
+def generate_thumbnail(
+    file_path: Path,
+    thumb_path: Path,
+    max_size: int = 200,
+    file_id: Optional[str] = None,
+) -> bool:
+    """
+    Generate a JPEG thumbnail for an image file.
+    Preserves aspect ratio, converts to RGB on white background if RGBA/transparent,
+    and saves with quality 70.
+    Returns True on success, False on any failure without raising exceptions.
+    """
+    tmp_path = thumb_path.with_suffix(f".tmp-{uuid.uuid4().hex}")
+    try:
+        with Image.open(file_path) as img:
+            img = ImageOps.exif_transpose(img)
+            if img.mode in ("RGBA", "LA") or ("transparency" in img.info):
+                rgba = img.convert("RGBA")
+                background = Image.new("RGB", rgba.size, (255, 255, 255))
+                background.paste(rgba, mask=rgba.split()[3])
+                img = background
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+            img.thumbnail((max_size, max_size))
+            img.save(tmp_path, format="JPEG", quality=70)
+        os.replace(tmp_path, thumb_path)
+        return True
+    except Exception as e:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+        fid = file_id or (
+            thumb_path.name[:-len(".thumb.jpg")]
+            if thumb_path.name.endswith(".thumb.jpg")
+            else file_path.name
+        )
+        error_msg = str(e) or type(e).__name__
+        log_event("thumbnail_generation_failed", file_id=fid, error=error_msg, reason=error_msg)
+        return False
+
+
 def format_expiry(expires_in: int) -> str:
     if expires_in <= 0:
         return "Nunca expira"
@@ -1510,6 +1573,7 @@ def _view_file(file_id: str, filename: str = "") -> Response:
                 metadata_path.unlink()
             except FileNotFoundError:
                 pass
+        _delete_thumbnail(metadata.file_id)
         raise HTTPException(status_code=404, detail="File expired")
 
     if not file_path.exists():
@@ -1538,6 +1602,76 @@ def _view_file(file_id: str, filename: str = "") -> Response:
 async def view_file(file_id: str, filename: str):
     """Viewer page for images"""
     return await run_in_threadpool(_view_file, file_id, filename)
+
+
+def _thumbnail_file(file_id: str, filename: str = "") -> FileResponse:
+    """Synchronous thumbnail logic executed in a threadpool worker."""
+    try:
+        file_path, metadata_path = get_file_paths(file_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    metadata = FileMetadata.from_file(metadata_path)
+    if not metadata:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if metadata.is_expired:
+        if file_path.exists():
+            try:
+                file_path.unlink()
+            except FileNotFoundError:
+                pass
+        if metadata_path.exists():
+            try:
+                metadata_path.unlink()
+            except FileNotFoundError:
+                pass
+        _delete_thumbnail(metadata.file_id)
+        raise HTTPException(status_code=404, detail="File expired")
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if not is_image_file(metadata.filename):
+        raise HTTPException(status_code=404, detail="File is not an image")
+
+    thumb_path = DATA_DIR / f"{metadata.file_id}.thumb.jpg"
+    if thumb_path.exists():
+        return FileResponse(
+            path=thumb_path,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
+    fail_marker_path = DATA_DIR / f"{metadata.file_id}.thumb.fail"
+    if fail_marker_path.exists():
+        content_type, _ = mimetypes.guess_type(metadata.filename)
+        if not content_type:
+            content_type = "application/octet-stream"
+        return FileResponse(path=file_path, media_type=content_type)
+
+    success = generate_thumbnail(file_path, thumb_path, file_id=metadata.file_id)
+    if not success:
+        try:
+            fail_marker_path.touch(exist_ok=True)
+        except Exception:
+            pass
+        content_type, _ = mimetypes.guess_type(metadata.filename)
+        if not content_type:
+            content_type = "application/octet-stream"
+        return FileResponse(path=file_path, media_type=content_type)
+
+    return FileResponse(
+        path=thumb_path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@app.get("/t/{file_id}/{filename}")
+async def thumbnail_file(file_id: str, filename: str):
+    """Serve a thumbnail for an image file."""
+    return await run_in_threadpool(_thumbnail_file, file_id, filename)
 
 
 @app.post("/admin/set-all-infinite")
