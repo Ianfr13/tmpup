@@ -66,6 +66,7 @@ import {
   buildAuthenticatedServer,
   buildTestServer,
   makeDataDir,
+  httpCall,
   removeDataDir,
   restoreConfig,
   useApiKeys,
@@ -1760,7 +1761,7 @@ describe("upload body fidelity over a real socket", () => {
     const address = await app.listen({ host: "127.0.0.1", port: 0 });
     try {
       const body = '{\n  "socket": true,\n  "x": [1, 2]\n}\n';
-      const upload = await fetch(address + "/api/upload", {
+      const upload = await httpCall(address + "/api/upload", {
         method: "POST",
         headers: {
           ...authHeader(),
@@ -1771,11 +1772,11 @@ describe("upload body fidelity over a real socket", () => {
         body,
       });
       expect(upload.status).toBe(200);
-      const id = ((await upload.json()) as { id: string }).id;
+      const id = (JSON.parse(upload.body.toString("utf8")) as { id: string }).id;
 
-      const download = await fetch(address + "/d/" + id + "/socket.json");
+      const download = await httpCall(address + "/d/" + id + "/socket.json");
       expect(download.status).toBe(200);
-      expect(Buffer.from(await download.arrayBuffer()).toString("utf8")).toBe(body);
+      expect(download.body.toString("utf8")).toBe(body);
     } finally {
       await app.close();
     }
@@ -1794,23 +1795,15 @@ describe("MCP body limit over a real socket", () => {
     const app = await authServer();
     const address = await app.listen({ host: "127.0.0.1", port: 0 });
     try {
-      // A ReadableStream body has no content-length, so the handler has to hit
+      // A body sent without content-length is chunked, so the handler has to hit
       // its own read limit instead of the cheap header check.
-      const oversized = new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("x".repeat(4096)));
-          controller.close();
-        },
-      });
-      const response = await fetch(address + "/mcp", {
+      const response = await httpCall(address + "/mcp", {
         method: "POST",
         headers: { "content-type": "application/json", ...authHeader() },
-        body: oversized,
-        // node fetch requires duplex for a streaming request body
-        duplex: "half",
+        body: "x".repeat(4096),
       });
       expect(response.status).toBe(413);
-      const payload = (await response.json()) as { error: { code: number } };
+      const payload = JSON.parse(response.body.toString("utf8")) as { error: { code: number } };
       expect(payload.error.code).toBe(-32000);
     } finally {
       config.maxMcpUploadSize = originalLimit;
@@ -1818,6 +1811,3 @@ describe("MCP body limit over a real socket", () => {
     }
   });
 });
-
-
-

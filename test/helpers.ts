@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -45,6 +46,45 @@ export async function removeDataDir(dataDir: string): Promise<void> {
     ? parent
     : dataDir;
   await rm(target, { recursive: true, force: true });
+}
+
+export interface HttpResult {
+  status: number;
+  headers: Record<string, string | string[] | undefined>;
+  body: Buffer;
+}
+
+/**
+ * One-shot HTTP call over a real socket.
+ *
+ * Uses node:http with `agent: false` instead of fetch: the global keep-alive
+ * dispatcher holds idle sockets open, and Fastify's close() would then wait for
+ * them (the socket tests hung on app.close()). A body sent without a
+ * content-length header is chunked, which exercises the streaming paths.
+ */
+export function httpCall(
+  url: string,
+  options: { method?: string; headers?: Record<string, string>; body?: Buffer | string } = {},
+): Promise<HttpResult> {
+  return new Promise<HttpResult>((resolve, reject) => {
+    const request = httpRequest(
+      url,
+      { method: options.method ?? "GET", headers: options.headers, agent: false },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () =>
+          resolve({
+            status: response.statusCode ?? 0,
+            headers: response.headers,
+            body: Buffer.concat(chunks),
+          }),
+        );
+      },
+    );
+    request.on("error", reject);
+    request.end(options.body);
+  });
 }
 
 /** API key used by the ported `auth_client` fixture. */

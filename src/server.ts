@@ -24,6 +24,9 @@ export interface BuildServerOptions {
 export async function buildServer(options: BuildServerOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({
     logger: options.logger ?? false,
+    // close() must not wait for idle keep-alive sockets (a browser/undici pool
+    // would otherwise hold the shutdown open); in-flight requests still finish.
+    forceCloseConnections: "idle",
   });
 
   // app.py always consumed the raw request bytes (request.stream()), whatever
@@ -48,10 +51,14 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     void reply.code(404).send({ detail: "Not Found" });
   });
 
-  app.setErrorHandler((error, _request, reply) => {
+  app.setErrorHandler((error, request, reply) => {
     if (error instanceof HttpError) {
       if (error.statusCode >= 500) {
-        console.error("request failed:", error);
+        // Log the real reason but never leak internals (paths, driver text) to
+        // the client; app.py forwarded the detail verbatim here.
+        request.log.error({ err: error }, "request failed");
+        void reply.code(error.statusCode).send({ detail: "Internal Server Error" });
+        return;
       }
       void reply.code(error.statusCode).send({ detail: error.detail });
       return;
@@ -61,7 +68,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
         ? ((error as { statusCode: number }).statusCode as number)
         : 500;
     if (statusCode >= 500) {
-      console.error("request failed:", error);
+      request.log.error({ err: error }, "request failed");
     }
     const detail = statusCode >= 500 ? "Internal Server Error" : (error as Error).message;
     void reply.code(statusCode).send({ detail });

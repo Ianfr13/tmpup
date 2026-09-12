@@ -214,5 +214,18 @@ Adaptações conscientes (documentar no teste): os testes Python que verificam
     limita em 1MB, `/mcp` em 1,5× o teto do MCP e o upload continua sem teto (igual
     ao app.py). Corpos acima do limite são drenados antes do 413 para não derrubar o
     socket no meio da requisição.
+25. **Conteúdo inline "scriptável" é sandboxed.** Arquivos servidos inline como
+    `text/html`, `application/xhtml+xml`, `image/svg+xml` ou `*/xml` recebem
+    `X-Content-Type-Options: nosniff` e `Content-Security-Policy: sandbox` (o app.py
+    servia inline sem header nenhum, permitindo script na origem do serviço via
+    upload). Forçar download (`?dl=1`) não leva os headers.
+26. **`/d` e `/t` reproduzem o `FileResponse` do Starlette**: `Accept-Ranges`,
+    respostas `206`/`416` para `Range` de intervalo único, `ETag`/`Last-Modified` e
+    `304` para `If-None-Match`/`If-Modified-Since`.
+27. **Erros 5xx** devolvem `{"detail":"Internal Server Error"}` e logam o motivo real;
+    o app.py devolvia a mensagem interna (caminhos de arquivo, texto do driver) ao
+    cliente.
+28. **Shutdown** usa `forceCloseConnections: "idle"`: o `close()` não espera conexões
+    keep-alive ociosas (requisições em andamento terminam normalmente).
 
 

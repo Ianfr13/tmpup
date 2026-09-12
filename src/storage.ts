@@ -47,7 +47,7 @@ function isNotFound(err: unknown): boolean {
 }
 
 /** Async equivalent of Python's `Path.exists()`. */
-async function fileExists(filePath: string): Promise<boolean> {
+export async function fileExists(filePath: string): Promise<boolean> {
   try {
     await fsp.access(filePath);
     return true;
@@ -166,7 +166,22 @@ export class FileMetadata {
   static async fromFile(metadataPath: string): Promise<FileMetadata | null> {
     try {
       const raw = await fsp.readFile(metadataPath, "utf8");
-      return FileMetadata.fromDict(JSON.parse(raw) as FileMetadataData);
+      const data: unknown = JSON.parse(raw);
+      // Valid JSON that is not a metadata object (null, an array, a stray file
+      // named <uuid>.meta.json) is treated as corrupt, exactly like a parse error.
+      if (typeof data !== "object" || data === null || Array.isArray(data)) {
+        return null;
+      }
+      const record = data as Partial<FileMetadataData>;
+      if (
+        typeof record.file_id !== "string" ||
+        typeof record.filename !== "string" ||
+        typeof record.ttl !== "number" ||
+        typeof record.created_at !== "number"
+      ) {
+        return null;
+      }
+      return FileMetadata.fromDict(record as FileMetadataData);
     } catch (err) {
       if (err instanceof SyntaxError || isNotFound(err)) {
         return null;
@@ -204,7 +219,7 @@ export class FileMetadata {
 // ---------------------------------------------------------------------------
 /** Validate TTL: 0 means never expires, otherwise 1..31536000 seconds. */
 export function validateTtl(ttl: unknown): number {
-  if (typeof ttl === "boolean" || typeof ttl !== "number" || !Number.isInteger(ttl)) {
+  if (typeof ttl !== "number" || !Number.isInteger(ttl)) {
     throw new Error("TTL must be a valid integer");
   }
   if (ttl < 0 || ttl > 86400 * 365) {

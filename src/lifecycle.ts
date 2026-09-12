@@ -14,33 +14,39 @@ export async function migrateAllToInfiniteTtl(): Promise<number> {
   return migrated;
 }
 
-/** Start the periodic expired-file cleanup. Returns a stop function. */
-export function startCleanupLoop(): () => void {
-  // app.py's loop was `while True: await sleep(); cleanup()`: strictly
-  // sequential. setInterval would start a new pass while the previous one is
-  // still running (racy unlinks and a double-counted `cleaned`), so skip ticks.
+/**
+ * Start the periodic expired-file cleanup.
+ *
+ * app.py's loop was `while True: await sleep(); cleanup()`: strictly sequential.
+ * setInterval would start a new pass while the previous one is still running
+ * (racy unlinks and a double-counted `cleaned`), so ticks are skipped while a
+ * pass is in flight. The returned stop function clears the timer and waits for
+ * the in-flight pass, so shutdown never races a running cleanup.
+ */
+export function startCleanupLoop(): () => Promise<void> {
   let running = false;
+  let current: Promise<void> = Promise.resolve();
   const timer = setInterval(() => {
     if (running) return;
     running = true;
-    void cleanupExpiredFiles()
+    current = cleanupExpiredFiles()
       .catch((error: unknown) => {
         console.error("cleanup failed:", error);
       })
-      .finally(() => {
+      .then(() => {
         running = false;
       });
   }, config.cleanupIntervalMs);
   timer.unref?.();
-  return () => clearInterval(timer);
+  return async () => {
+    clearInterval(timer);
+    await current;
+  };
 }
 
 /** Everything app.py did in its startup event. */
-export async function runStartupTasks(): Promise<() => void> {
+export async function runStartupTasks(): Promise<() => Promise<void>> {
   await migrateAllToInfiniteTtl();
   const stop = startCleanupLoop();
-  console.log(`TmpUp started - data directory: ${config.dataDir}`);
-  console.log(`Auto-cleanup every ${config.cleanupIntervalMs / 1000} seconds`);
-  logEvent("startup", { data_dir: config.dataDir });
   return stop;
 }

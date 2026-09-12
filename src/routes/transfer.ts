@@ -1,28 +1,30 @@
 /**
  * File transfer routes: download (/d), viewer (/v) and thumbnail (/t).
- * Ported 1:1 from app.py 1411-1806.
+ * Ported 1:1 from app.py 1411-1806, plus the Starlette FileResponse behaviours
+ * app.py relied on (byte ranges, ETag/Last-Modified, 304/416).
  */
 import { createReadStream } from "node:fs";
 import { stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { config } from "../config.js";
 import { HttpError } from "../errors.js";
 import { removeIfExists } from "../fsutil.js";
 import { escapeHtml, jsonForScript } from "../html.js";
 import { guessContentType } from "../mime.js";
-import { pythonQuote } from "../url.js";
 import { renderViewerPage } from "../templates/index.js";
 import {
   FileMetadata,
   deleteThumbnail,
+  fileExists,
   formatExpiry,
   generateThumbnail,
   getFilePaths,
   isImageFile,
   withMetadataLock,
 } from "../storage.js";
+import { pythonQuote } from "../url.js";
 
 /** Description of a file to stream back to the client. */
 export interface FileResponseDescriptor {
@@ -47,23 +49,32 @@ const THUMBNAIL_CACHE_HEADERS: Record<string, string> = {
   "Cache-Control": "public, max-age=31536000, immutable",
 };
 
+/**
+ * Inline content types that a browser can execute as a document. Uploaded HTML
+ * or SVG is therefore served sandboxed: app.py served it inline too, which let
+ * an uploaded file run script on the service origin.
+ */
+const SCRIPTABLE_INLINE_TYPES = new Set([
+  "text/html",
+  "application/xhtml+xml",
+  "image/svg+xml",
+  "text/xml",
+  "application/xml",
+]);
+
 export function isInlineContentType(contentType: string): boolean {
   return INLINE_CONTENT_TYPE_PREFIXES.some((prefix) => contentType.startsWith(prefix));
+}
+
+export function isScriptableInlineType(contentType: string): boolean {
+  const base = (contentType.split(";")[0] ?? "").trim().toLowerCase();
+  return SCRIPTABLE_INLINE_TYPES.has(base);
 }
 
 /** `force_download = bool(dl and dl.lower() not in ("0", "false", "no"))` */
 export function isForcedDownload(dl: string | null | undefined): boolean {
   if (!dl) return false;
   return !["0", "false", "no"].includes(dl.toLowerCase());
-}
-
-async function exists(target: string): Promise<boolean> {
-  try {
-    await stat(target);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -99,7 +110,7 @@ async function resolveStoredFile(
     throw new HttpError(404, "File expired");
   }
 
-  if (!(await exists(filePath))) {
+  if (!(await fileExists(filePath))) {
     throw new HttpError(404, "File not found");
   }
 
@@ -125,6 +136,10 @@ export async function downloadFile(
   const headers: Record<string, string> = {};
   if (inline && !forceDownload) {
     headers["Content-Disposition"] = "inline";
+    if (isScriptableInlineType(contentType)) {
+      headers["X-Content-Type-Options"] = "nosniff";
+      headers["Content-Security-Policy"] = "sandbox";
+    }
   } else {
     // app.py: urlquote(metadata.filename, safe="") -- slashes are encoded too.
     headers["Content-Disposition"] = `attachment; filename*=UTF-8''${pythonQuote(metadata.filename, "")}`;
@@ -193,12 +208,12 @@ export async function thumbnailFile(fileId: string, filename = ""): Promise<File
   }
 
   const thumbPath = path.join(config.dataDir, `${metadata.fileId}.thumb.jpg`);
-  if (await exists(thumbPath)) {
+  if (await fileExists(thumbPath)) {
     return { filePath: thumbPath, mediaType: "image/jpeg", headers: { ...THUMBNAIL_CACHE_HEADERS } };
   }
 
   const failMarkerPath = path.join(config.dataDir, `${metadata.fileId}.thumb.fail`);
-  if (await exists(failMarkerPath)) {
+  if (await fileExists(failMarkerPath)) {
     return { filePath, mediaType: guessContentType(metadata.filename), headers: {} };
   }
 
@@ -215,13 +230,91 @@ export async function thumbnailFile(fileId: string, filename = ""): Promise<File
   return { filePath: thumbPath, mediaType: "image/jpeg", headers: { ...THUMBNAIL_CACHE_HEADERS } };
 }
 
-async function streamFile(reply: FastifyReply, descriptor: FileResponseDescriptor): Promise<FastifyReply> {
+interface ByteRange {
+  start: number;
+  end: number;
+}
+
+/** Single-range `Range: bytes=...` parsing (Starlette FileResponse semantics). */
+export function parseRangeHeader(
+  header: string | undefined,
+  size: number,
+): ByteRange | "unsatisfiable" | null {
+  if (!header) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match) return null;
+  const rawStart = match[1] ?? "";
+  const rawEnd = match[2] ?? "";
+  if (rawStart === "" && rawEnd === "") return null;
+
+  let start: number;
+  let end: number;
+  if (rawStart === "") {
+    const suffix = Number(rawEnd);
+    if (!Number.isFinite(suffix) || suffix <= 0) return "unsatisfiable";
+    start = Math.max(0, size - suffix);
+    end = size - 1;
+  } else {
+    start = Number(rawStart);
+    end = rawEnd === "" ? size - 1 : Math.min(Number(rawEnd), size - 1);
+  }
+  if (!Number.isFinite(start) || size === 0 || start >= size || start > end) {
+    return "unsatisfiable";
+  }
+  return { start, end };
+}
+
+/** True when the client's validators match the current representation (304). */
+function isNotModified(request: FastifyRequest, etag: string, lastModified: Date): boolean {
+  const ifNoneMatch = request.headers["if-none-match"];
+  if (typeof ifNoneMatch === "string" && ifNoneMatch.length > 0) {
+    return ifNoneMatch.split(",").some((candidate) => candidate.trim() === etag);
+  }
+  const ifModifiedSince = request.headers["if-modified-since"];
+  if (typeof ifModifiedSince === "string" && ifModifiedSince.length > 0) {
+    const since = Date.parse(ifModifiedSince);
+    return Number.isFinite(since) && Math.floor(lastModified.getTime() / 1000) <= Math.floor(since / 1000);
+  }
+  return false;
+}
+
+async function streamFile(
+  reply: FastifyReply,
+  request: FastifyRequest,
+  descriptor: FileResponseDescriptor,
+): Promise<FastifyReply> {
   const info = await stat(descriptor.filePath);
+  const etag = `"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`;
+
   reply.type(descriptor.mediaType);
-  reply.header("content-length", String(info.size));
+  reply.header("accept-ranges", "bytes");
+  reply.header("last-modified", info.mtime.toUTCString());
+  reply.header("etag", etag);
   for (const [name, value] of Object.entries(descriptor.headers)) {
     reply.header(name, value);
   }
+
+  if (isNotModified(request, etag, info.mtime)) {
+    reply.code(304);
+    return reply.send();
+  }
+
+  const range = parseRangeHeader(
+    typeof request.headers.range === "string" ? request.headers.range : undefined,
+    info.size,
+  );
+  if (range === "unsatisfiable") {
+    reply.code(416).header("content-range", `bytes */${info.size}`);
+    return reply.send();
+  }
+  if (range) {
+    reply.code(206);
+    reply.header("content-range", `bytes ${range.start}-${range.end}/${info.size}`);
+    reply.header("content-length", String(range.end - range.start + 1));
+    return reply.send(createReadStream(descriptor.filePath, { start: range.start, end: range.end }));
+  }
+
+  reply.header("content-length", String(info.size));
   return reply.send(createReadStream(descriptor.filePath));
 }
 
@@ -234,7 +327,7 @@ export async function registerTransferRoutes(app: FastifyInstance): Promise<void
     // first value, so normalize instead of crashing on .toLowerCase().
     const dl = Array.isArray(request.query.dl) ? (request.query.dl[0] ?? null) : (request.query.dl ?? null);
     const result = await downloadFile(request.params.file_id, request.params.filename, dl);
-    return streamFile(reply, result);
+    return streamFile(reply, request, result);
   });
 
   app.get<{ Params: { file_id: string; filename: string } }>(
@@ -252,7 +345,7 @@ export async function registerTransferRoutes(app: FastifyInstance): Promise<void
     "/t/:file_id/:filename",
     async (request, reply) => {
       const result = await thumbnailFile(request.params.file_id, request.params.filename);
-      return streamFile(reply, result);
+      return streamFile(reply, request, result);
     },
   );
 }

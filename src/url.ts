@@ -34,8 +34,9 @@ export function pythonUnquote(value: string): string {
   const flush = (): void => {
     if (bytes.length === 0) return;
     const buf = Buffer.from(bytes);
-    // Decode as UTF-8, replacing invalid sequences with U+FFFD.
-    out += new TextDecoder("utf-8", { fatal: false }).decode(buf);
+    // Decode as UTF-8, replacing invalid sequences with U+FFFD. ignoreBOM keeps a
+    // leading U+FEFF (Python's bytes.decode does not strip it either).
+    out += new TextDecoder("utf-8", { fatal: false, ignoreBOM: true }).decode(buf);
     bytes.length = 0;
   };
   for (let i = 0; i < value.length; i += 1) {

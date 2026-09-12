@@ -286,7 +286,10 @@ export async function registerMcpRoutes(app: FastifyInstance): Promise<void> {
       }
       parsedBody = JSON.parse(data.toString("utf8"));
     } catch (error) {
-      console.error("mcp body read failed:", error);
+      if (!(error instanceof SyntaxError)) {
+        // Invalid JSON is a client error (answered below), not a server fault.
+        console.error("mcp body read failed:", error);
+      }
       await reply.code(400).send({
         jsonrpc: "2.0",
         error: { code: -32700, message: "Parse error: Invalid JSON-RPC message" },

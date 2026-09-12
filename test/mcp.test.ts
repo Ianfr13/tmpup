@@ -47,6 +47,7 @@ import {
 import { FileMetadata, extendFileTtl } from "../src/storage.js";
 import {
   authHeader,
+  httpCall,
   buildAuthenticatedServer,
   buildTestServer,
   makeDataDir,
@@ -446,12 +447,14 @@ describe("mcp streamable http endpoint", () => {
  * real HTTP path (listen on an ephemeral port + fetch).
  */
 describe("MCP over real HTTP", () => {
-  it("serves initialize and tools/list on the socket, and 405 for GET", async () => {
+  it("serves initialize, tools/list and tools/call on the socket, and 405 for GET", async () => {
     const app = await buildAuthenticatedServer();
     const address = await app.listen({ host: "127.0.0.1", port: 0 });
     try {
+      // node:http with agent:false instead of fetch: the global keep-alive
+      // dispatcher would hold sockets open and stall app.close().
       const call = async (body: unknown) => {
-        const response = await fetch(address + "/mcp", {
+        const response = await httpCall(address + "/mcp", {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -460,7 +463,10 @@ describe("MCP over real HTTP", () => {
           },
           body: JSON.stringify(body),
         });
-        return { status: response.status, json: (await response.json()) as Record<string, unknown> };
+        return {
+          status: response.status,
+          json: JSON.parse(response.body.toString("utf8")) as Record<string, unknown>,
+        };
       };
 
       const initialize = await call({
@@ -480,19 +486,34 @@ describe("MCP over real HTTP", () => {
       const names = (tools.json.result as { tools: { name: string }[] }).tools.map((t) => t.name);
       expect(names).toEqual(["upload_file", "list_files", "get_file_info", "extend_ttl", "delete_file"]);
 
-      const badJson = await fetch(address + "/mcp", {
+      const toolsCall = await call({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "upload_file", arguments: { filename: "socket-mcp.txt", content_base64: "aGVsbG8=", ttl: 0 } },
+      });
+      expect(toolsCall.status).toBe(200);
+      const toolResult = toolsCall.json.result as {
+        content: { type: string; text: string }[];
+        structuredContent: { id: string; expires_in: number };
+      };
+      expect(toolResult.content[0]?.type).toBe("text");
+      expect(toolResult.structuredContent.expires_in).toBe(0);
+      expect(toolResult.structuredContent.id).toMatch(/^[0-9a-f-]{36}$/);
+
+      const badJson = await httpCall(address + "/mcp", {
         method: "POST",
         headers: { "content-type": "application/json", ...authHeader() },
         body: "not-json",
       });
       expect(badJson.status).toBe(400);
-      expect(await badJson.json()).toEqual({
+      expect(JSON.parse(badJson.body.toString("utf8"))).toEqual({
         jsonrpc: "2.0",
         error: { code: -32700, message: "Parse error: Invalid JSON-RPC message" },
         id: null,
       });
 
-      const get = await fetch(address + "/mcp", { method: "GET", headers: authHeader() });
+      const get = await httpCall(address + "/mcp", { method: "GET", headers: authHeader() });
       expect(get.status).toBe(405);
     } finally {
       await app.close();
