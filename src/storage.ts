@@ -459,12 +459,16 @@ export async function setAllFilesInfiniteTtl(): Promise<number> {
   for (const entry of await metadataSidecars(dir)) {
     const metadataPath = path.join(dir, entry);
     try {
-      const metadata = await FileMetadata.fromFile(metadataPath);
-      if (metadata && metadata.ttl !== 0) {
-        metadata.ttl = 0;
-        await metadata.save(metadataPath);
-        updated += 1;
-      }
+      // Read-modify-write under the same lock the counters/TTL/delete paths
+      // use, so a concurrent view/download save is never lost.
+      await withMetadataLock(async () => {
+        const metadata = await FileMetadata.fromFile(metadataPath);
+        if (metadata && metadata.ttl !== 0) {
+          metadata.ttl = 0;
+          await metadata.save(metadataPath);
+          updated += 1;
+        }
+      });
     } catch {
       // Unreadable sidecars are skipped, matching FileMetadata.from_file -> None.
     }
@@ -542,7 +546,12 @@ export function formatExpiry(expiresIn: number): string {
 /** Lowercase extension of `filename` (empty when there is none). */
 function fileExtension(filename: string): string {
   const dot = filename.lastIndexOf(".");
-  return dot === -1 ? "" : filename.slice(dot + 1).toLowerCase();
+  // pathlib's Path(name).suffix is "" for hidden and trailing-dot names
+  // (".env", ".png", "report."), unlike a naive lastIndexOf(".") split.
+  if (dot <= 0 || dot === filename.length - 1) {
+    return "";
+  }
+  return filename.slice(dot + 1).toLowerCase();
 }
 
 /** True when `filename` has a known image extension. */

@@ -1,9 +1,11 @@
 node_modules
 dist
+coverage
 test
 docs
 .git
 .worktrees
 .serena
-__pycache__
+.env
+.env.*
 *.md

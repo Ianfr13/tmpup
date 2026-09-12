@@ -437,3 +437,66 @@ describe("mcp streamable http endpoint", () => {
     }
   });
 });
+
+/**
+ * The inject()-based tests above bypass Fastify's real body handling, which is
+ * how a regression slipped through once: removing the built-in JSON parser to
+ * keep uploads byte-exact left POST /mcp with an unread stream, so the transport
+ * answered -32700 while every inject test still passed. This one exercises the
+ * real HTTP path (listen on an ephemeral port + fetch).
+ */
+describe("MCP over real HTTP", () => {
+  it("serves initialize and tools/list on the socket, and 405 for GET", async () => {
+    const app = await buildAuthenticatedServer();
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    try {
+      const call = async (body: unknown) => {
+        const response = await fetch(address + "/mcp", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+            ...authHeader(),
+          },
+          body: JSON.stringify(body),
+        });
+        return { status: response.status, json: (await response.json()) as Record<string, unknown> };
+      };
+
+      const initialize = await call({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "vitest", version: "1" },
+        },
+      });
+      expect(initialize.status).toBe(200);
+      expect((initialize.json.result as { serverInfo: { name: string } }).serverInfo.name).toBe("TmpUp");
+
+      const tools = await call({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+      const names = (tools.json.result as { tools: { name: string }[] }).tools.map((t) => t.name);
+      expect(names).toEqual(["upload_file", "list_files", "get_file_info", "extend_ttl", "delete_file"]);
+
+      const badJson = await fetch(address + "/mcp", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...authHeader() },
+        body: "not-json",
+      });
+      expect(badJson.status).toBe(400);
+      expect(await badJson.json()).toEqual({
+        jsonrpc: "2.0",
+        error: { code: -32700, message: "Parse error: Invalid JSON-RPC message" },
+        id: null,
+      });
+
+      const get = await fetch(address + "/mcp", { method: "GET", headers: authHeader() });
+      expect(get.status).toBe(405);
+    } finally {
+      await app.close();
+    }
+  });
+});
+

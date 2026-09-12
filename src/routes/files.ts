@@ -4,13 +4,13 @@
  */
 import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { unlink } from "node:fs/promises";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import { config } from "../config.js";
 import { HttpError } from "../errors.js";
+import { removeIfExists } from "../fsutil.js";
 import { filterSortPaginateFiles } from "../files.js";
 import {
   FileMetadata,
@@ -80,14 +80,6 @@ function parsePage(value: unknown): number {
   }
 }
 
-async function removeIfExists(target: string): Promise<void> {
-  try {
-    await unlink(target);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-}
-
 /** Stream the request body to disk, returning how many bytes were written. */
 async function writeRequestBodyTo(body: unknown, filePath: string): Promise<number> {
   if (isReadable(body)) {
@@ -99,10 +91,16 @@ async function writeRequestBodyTo(body: unknown, filePath: string): Promise<numb
     await pipeline(Readable.from([body]), createWriteStream(filePath));
     return body.length;
   }
-  const text = body === undefined ? "" : JSON.stringify(body);
-  const buffer = Buffer.from(text, "utf8");
-  await pipeline(Readable.from([buffer]), createWriteStream(filePath));
-  return buffer.length;
+  if (typeof body === "string") {
+    // Parsed text body (only reachable if a content-type parser is re-added):
+    // write the bytes the parser decoded instead of quoting them as JSON.
+    const buffer = Buffer.from(body, "utf8");
+    await pipeline(Readable.from([buffer]), createWriteStream(filePath));
+    return buffer.length;
+  }
+  // An already-parsed object cannot be turned back into the original bytes
+  // (JSON.stringify would silently rewrite the upload), so fail loudly.
+  throw new Error("request body was already consumed by a content-type parser");
 }
 
 export async function registerFileRoutes(app: FastifyInstance): Promise<void> {

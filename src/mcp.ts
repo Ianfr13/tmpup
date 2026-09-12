@@ -6,12 +6,14 @@
  */
 import { randomUUID } from "node:crypto";
 import { unlink, writeFile } from "node:fs/promises";
+import type { IncomingMessage } from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import { config } from "./config.js";
+import { HttpError } from "./errors.js";
 import { filterSortPaginateFiles } from "./files.js";
 import { logEvent } from "./logger.js";
 import {
@@ -255,6 +257,21 @@ export function isPlainBody(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Buffer.isBuffer(value);
 }
 
+/** Read a request stream, rejecting as soon as it exceeds `limit` bytes. */
+async function readBodyWithLimit(stream: IncomingMessage, limit: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of stream) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
+    total += buffer.length;
+    if (total > limit) {
+      throw new HttpError(413, "Request body too large");
+    }
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
 /**
  * Mount the MCP Streamable HTTP endpoint at /mcp (stateless: one server per
  * request).
@@ -265,18 +282,67 @@ export function isPlainBody(value: unknown): boolean {
  * would open an SSE stream that never ends and leak the per-request server.
  */
 export async function registerMcpRoutes(app: FastifyInstance): Promise<void> {
+  // The transport reads the (unparsed) request stream into memory, so bound the
+  // declared payload: a JSON-RPC body only has to carry a base64 200MB upload.
+  const maxBodyBytes = Math.ceil(config.maxMcpUploadSize * 1.5);
+
   const handler = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const declaredLength = Number(request.headers["content-length"] ?? 0);
+    if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) {
+      await reply.code(413).send({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Request body too large." },
+        id: null,
+      });
+      return;
+    }
+
+    // Fastify hands every body over as a raw stream (its JSON parser was
+    // removed so uploads stay byte-exact), so the JSON-RPC payload is parsed
+    // here: this also bounds the memory the transport would otherwise allocate.
+    let parsedBody: unknown;
+    try {
+      const raw = await readBodyWithLimit(request.raw, maxBodyBytes);
+      parsedBody = JSON.parse(raw.toString("utf8"));
+    } catch (error) {
+      const status = error instanceof HttpError && error.statusCode === 413 ? 413 : 400;
+      const message =
+        status === 413 ? "Request body too large." : "Parse error: Invalid JSON-RPC message";
+      await reply.code(status).send({
+        jsonrpc: "2.0",
+        error: { code: status === 413 ? -32000 : -32700, message },
+        id: null,
+      });
+      return;
+    }
+
     const server = createMcpServer();
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
     });
 
+    // After hijack() Fastify never writes for this request, so errors that
+    // escape the transport have to be answered on the raw response or the
+    // client waits forever.
     reply.hijack();
     try {
       await server.connect(transport);
-      const parsedBody = isPlainBody(request.body) ? request.body : undefined;
       await transport.handleRequest(request.raw, reply.raw, parsedBody);
+    } catch (error) {
+      console.error("mcp request failed:", error);
+      if (!reply.raw.headersSent) {
+        reply.raw.writeHead(500, { "content-type": "application/json; charset=utf-8" });
+        reply.raw.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            error: { code: -32603, message: "Internal error" },
+            id: null,
+          }),
+        );
+      } else if (!reply.raw.writableEnded) {
+        reply.raw.end();
+      }
     } finally {
       await transport.close().catch(() => undefined);
       await server.close().catch(() => undefined);

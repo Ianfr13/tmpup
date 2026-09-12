@@ -16,13 +16,15 @@
     "resolveJsonModule": true,
     "declaration": false,
     "sourceMap": true,
+    "noEmit": true,
     "types": [
       "node"
     ]
   },
   "include": [
     "src/**/*.ts",
-    "test/**/*.ts"
+    "test/**/*.ts",
+    "vitest.config.ts"
   ],
   "exclude": [
     "node_modules",

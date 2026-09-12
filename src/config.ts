@@ -28,6 +28,19 @@ export interface Config {
   cleanupIntervalMs: number;
 }
 
+/** Python's `int(os.environ["PORT"])` fails fast; so does this. */
+function parsePort(raw: string | undefined): number {
+  const text = (raw ?? "8844").trim();
+  if (!/^\d+$/.test(text)) {
+    throw new Error(`Invalid PORT: ${JSON.stringify(raw)} is not a positive integer`);
+  }
+  const value = Number.parseInt(text, 10);
+  if (value < 1 || value > 65535) {
+    throw new Error(`Invalid PORT: ${value} is out of range (1-65535)`);
+  }
+  return value;
+}
+
 function parseApiKeys(raw: string | undefined): Set<string> {
   return new Set(
     (raw ?? "")
@@ -46,7 +59,7 @@ export const config: Config = {
   sessionMaxAge: 86400 * 7,
   maxMcpUploadSize: 200 * 1024 * 1024,
   dataDir: process.env.DATA_DIR ?? "/data",
-  port: Number.parseInt(process.env.PORT ?? "8844", 10),
+  port: parsePort(process.env.PORT),
   httpHost: process.env.HOST ?? "0.0.0.0",
   apiKeys: parseApiKeys(process.env.TMPUP_API_KEYS),
   pageSize: 50,

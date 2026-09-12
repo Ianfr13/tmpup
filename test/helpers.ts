@@ -3,13 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 
-import { config } from "../src/config.js";
+import { config, type Config } from "../src/config.js";
 import { buildServer } from "../src/server.js";
 
-const ORIGINAL_CONFIG = {
-  dataDir: config.dataDir,
-  apiKeys: new Set(config.apiKeys),
-};
+/** Full config snapshot taken at module load (apiKeys cloned, not shared). */
+const ORIGINAL_CONFIG: Config = { ...config, apiKeys: new Set(config.apiKeys) };
 
 /** Create a throwaway data dir and point `config.dataDir` at it. */
 export async function makeDataDir(): Promise<string> {
@@ -20,20 +18,14 @@ export async function makeDataDir(): Promise<string> {
   return dataDir;
 }
 
-/** Point `config.dataDir` at an existing directory. */
-export function useDataDir(dir: string): void {
-  config.dataDir = dir;
-}
-
 /** Replace the accepted API keys (TypeScript equivalent of monkeypatching API_KEYS). */
 export function useApiKeys(...keys: string[]): void {
   config.apiKeys = new Set(keys);
 }
 
-/** Restore the config captured at module load. */
+/** Restore every config field captured at module load. */
 export function restoreConfig(): void {
-  config.dataDir = ORIGINAL_CONFIG.dataDir;
-  config.apiKeys = new Set(ORIGINAL_CONFIG.apiKeys);
+  Object.assign(config, ORIGINAL_CONFIG, { apiKeys: new Set(ORIGINAL_CONFIG.apiKeys) });
 }
 
 /** Build a Fastify instance ready for `app.inject()`. */
@@ -60,15 +52,3 @@ export function authHeader(key: string = TEST_API_KEY): Record<string, string> {
   return { "x-api-key": key };
 }
 
-/**
- * Minimal fake Response for the sync helpers that return a Fastify reply-less
- * response object (downloadFile/viewFile/thumbnailFile).
- */
-export interface CapturedFileResponse {
-  status?: number;
-  headers: Record<string, string>;
-  body?: Buffer | string;
-  redirect?: string;
-  filePath?: string;
-  contentType?: string;
-}

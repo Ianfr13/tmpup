@@ -31,7 +31,8 @@ export function pythonFormat(template: string, vars: Record<string, string>): st
   return template.replace(/\{\{|\}\}|\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, name: string | undefined) => {
     if (match === "{{") return "{";
     if (match === "}}") return "}";
-    if (name === undefined || !(name in vars)) {
+    // hasOwnProperty: `name in vars` would also match Object.prototype keys.
+    if (name === undefined || !Object.prototype.hasOwnProperty.call(vars, name)) {
       throw new Error("Missing template variable: " + String(name));
     }
     return vars[name] as string;

@@ -1,5 +1,10 @@
 # TmpUp — Port Python → TypeScript (spec de portabilidade)
 
+> **Status:** port concluído. O `app.py`/`test_app.py` original foi removido do repositório
+> (o histórico do git preserva a versão Python); as referências a linhas do `app.py` abaixo
+> são o mapa usado durante o port e apontam para o commit anterior à migração.
+
+
 Origem: `app.py` (2102 linhas) e `test_app.py` (2534 linhas, 86 testes, 100% verdes).
 Destino: Node 22 + TypeScript + Fastify 5 + `@modelcontextprotocol/sdk` + `sharp` + Vitest.
 
@@ -125,7 +130,7 @@ apiKeys, pageSize (50), cleanupIntervalMs (60000).
 
 ## Testes (paridade)
 
-`test/helpers.ts` (PRONTO) expõe `makeDataDir()`, `useDataDir()`, `useApiKeys()`,
+`test/helpers.ts` (PRONTO) expõe `makeDataDir()`, `useApiKeys()`,
 `restoreConfig()`, `buildTestServer()`.
 Arquivos: `test/storage.test.ts` (A), `test/auth.test.ts` (A/B), `test/templates.test.ts` (C),
 `test/routes.test.ts` (D), `test/mcp.test.ts` (E).

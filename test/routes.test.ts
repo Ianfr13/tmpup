@@ -1664,3 +1664,49 @@ describe("async request path", () => {
     await expectHttpError(viewFile("invalid-id", "test.png"), 404);
   });
 });
+
+/**
+ * Regression: POST /api/upload must persist the exact request bytes for every
+ * content type. Fastify's built-in JSON/text parsers consume the body before
+ * the handler runs, so re-encoding the parsed value corrupts the upload
+ * (minified JSON, quoted text). app.py streamed \`request.stream()\` raw, so
+ * anything but byte-for-byte storage is a porting regression.
+ */
+describe("upload body fidelity", () => {
+  async function uploadRaw(contentType: string, body: Buffer, filename: string): Promise<Buffer> {
+    const app = await authServer();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/upload",
+      headers: {
+        ...authHeader(),
+        "x-filename": filename,
+        "x-ttl": "3600",
+        "content-type": contentType,
+      },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    const id = res.json().id as string;
+
+    const download = await app.inject({ method: "GET", url: "/d/" + id + "/" + filename });
+    expect(download.statusCode).toBe(200);
+    return download.rawPayload;
+  }
+
+  it("stores text/plain bodies byte for byte", async () => {
+    const body = Buffer.from("linha 1\nlinha 2 com acentos: ção\n", "utf8");
+    expect(await uploadRaw("text/plain", body, "notas.txt")).toEqual(body);
+  });
+
+  it("stores application/json bodies byte for byte (no re-serialization)", async () => {
+    const body = Buffer.from('{\n  "a": 1,\n  "b": [1, 2, 3]\n}\n', "utf8");
+    expect(await uploadRaw("application/json", body, "dados.json")).toEqual(body);
+  });
+
+  it("stores unknown content types byte for byte", async () => {
+    const body = Buffer.from([0x00, 0x01, 0xfe, 0xff, 0x10]);
+    expect(await uploadRaw("application/x-custom", body, "blob.bin")).toEqual(body);
+  });
+});
+

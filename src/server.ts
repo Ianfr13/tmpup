@@ -9,7 +9,6 @@ import cookie from "@fastify/cookie";
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { authHook } from "./auth.js";
-import { config } from "./config.js";
 import { HttpError } from "./errors.js";
 import { registerMcpRoutes } from "./mcp.js";
 import { registerAuthRoutes } from "./routes/auth.js";
@@ -25,13 +24,16 @@ export interface BuildServerOptions {
 export async function buildServer(options: BuildServerOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({
     logger: options.logger ?? false,
-    // MCP tool calls carry base64 payloads in JSON, so the JSON body limit must
-    // accommodate a full 200MB upload (base64 inflates by ~4/3).
-    bodyLimit: Math.ceil(config.maxMcpUploadSize * 1.5),
   });
 
-  // Unknown content types are handed to the handler as a raw stream so that
-  // POST /api/upload can stream to disk without buffering the file in memory.
+  // app.py always consumed the raw request bytes (request.stream()), whatever
+  // the content type. Fastify's built-in JSON/text parsers would consume and
+  // re-encode the body first, so uploads sent as application/json or text/plain
+  // were stored corrupted (re-serialized JSON, re-quoted text). Remove those
+  // parsers and hand every body to the handler as a raw stream: routes either
+  // parse it explicitly (readJsonBody) or pass it to the MCP transport.
+  // Nothing buffers, so Fastify's bodyLimit does not apply to these streams.
+  app.removeContentTypeParser(["application/json", "text/plain"]);
   app.addContentTypeParser("*", (_request, payload, done) => {
     done(null, payload);
   });
@@ -52,7 +54,8 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
       void reply.code(error.statusCode).send({ detail: error.detail });
       return;
     }
-    // FastAPI returns 400 {"detail": "Invalid JSON body"} for malformed JSON.
+    // FastAPI returns 400 {"detail": "Invalid JSON body"} for malformed JSON
+    // (readJsonBody raises exactly that for the explicit parsing routes).
     if ((error as { code?: string }).code === "FST_ERR_CTP_INVALID_JSON_BODY") {
       void reply.code(400).send({ detail: "Invalid JSON body" });
       return;

@@ -15,10 +15,20 @@ export async function migrateAllToInfiniteTtl(): Promise<number> {
 
 /** Start the periodic expired-file cleanup. Returns a stop function. */
 export function startCleanupLoop(): () => void {
+  // app.py's loop was `while True: await sleep(); cleanup()`: strictly
+  // sequential. setInterval would start a new pass while the previous one is
+  // still running (racy unlinks and a double-counted `cleaned`), so skip ticks.
+  let running = false;
   const timer = setInterval(() => {
-    void cleanupExpiredFiles().catch((error: unknown) => {
-      console.error("cleanup failed:", error);
-    });
+    if (running) return;
+    running = true;
+    void cleanupExpiredFiles()
+      .catch((error: unknown) => {
+        console.error("cleanup failed:", error);
+      })
+      .finally(() => {
+        running = false;
+      });
   }, config.cleanupIntervalMs);
   timer.unref?.();
   return () => clearInterval(timer);

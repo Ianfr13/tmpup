@@ -1,8 +1,11 @@
 node_modules/
 dist/
 coverage/
-__pycache__/
-*.pyc
-.pytest_cache/
+
+# local secrets (see README: SECRET_KEY, GOOGLE_CLIENT_SECRET, TMPUP_API_KEYS)
+.env
+.env.*
+!.env.example
+
 .worktrees/
 .serena/

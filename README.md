@@ -83,6 +83,11 @@ docker run -p 8844:8844 -v tmpup-data:/data \
   -e TMPUP_API_KEYS=... tmpup
 ```
 
+A imagem roda como o usuário `node` (não-root) e o `SECRET_KEY` é usado para assinar os
+cookies de sessão — troque-o e todos os logins são invalidados. Com volume nomeado o
+Docker preserva o dono de `/data` (uid 1000); com bind mount, garanta
+`chown 1000:1000` no diretório do host.
+
 ## Notas de portabilidade
 
 - Sessões assinadas pelo serviço Python continuam válidas (mesmo formato itsdangerous,

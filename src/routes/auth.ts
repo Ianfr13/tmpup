@@ -10,6 +10,10 @@ const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo";
 
+/** Node's fetch has no default timeout (httpx did), so bound the Google calls. */
+const GOOGLE_REQUEST_TIMEOUT_MS = 10_000;
+const GOOGLE_AUTH_FAILED = "Falha na autenticacao Google";
+
 export function googleAuthUrl(): string {
   const params = new URLSearchParams({
     client_id: config.googleClientId,
@@ -46,17 +50,25 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         redirect_uri: `${config.baseUrl}/auth/callback`,
         grant_type: "authorization_code",
       }).toString(),
+      signal: AbortSignal.timeout(GOOGLE_REQUEST_TIMEOUT_MS),
     });
-    const tokenData = (await tokenResponse.json()) as { access_token?: string };
+    // An error page (proxy/HTML) must not surface as a JSON parse crash.
+    const tokenData = tokenResponse.ok
+      ? ((await tokenResponse.json().catch(() => ({}))) as { access_token?: string })
+      : {};
 
     if (!tokenData.access_token) {
-      throw new HttpError(401, "Falha na autenticacao Google");
+      throw new HttpError(401, GOOGLE_AUTH_FAILED);
     }
 
     const userinfoResponse = await fetch(GOOGLE_USERINFO_URL, {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
+      signal: AbortSignal.timeout(GOOGLE_REQUEST_TIMEOUT_MS),
     });
-    const userinfo = (await userinfoResponse.json()) as { email?: string };
+    if (!userinfoResponse.ok) {
+      throw new HttpError(401, GOOGLE_AUTH_FAILED);
+    }
+    const userinfo = (await userinfoResponse.json().catch(() => ({}))) as { email?: string };
 
     const email = userinfo.email ?? "";
     if (!email.endsWith(`@${config.allowedDomain}`)) {

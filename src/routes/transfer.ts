@@ -3,12 +3,13 @@
  * Ported 1:1 from app.py 1411-1806.
  */
 import { createReadStream } from "node:fs";
-import { stat, unlink, writeFile } from "node:fs/promises";
+import { stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 import { config } from "../config.js";
 import { HttpError } from "../errors.js";
+import { removeIfExists } from "../fsutil.js";
 import { escapeHtml, jsonForScript } from "../html.js";
 import { guessContentType } from "../mime.js";
 import { pythonQuote } from "../url.js";
@@ -65,14 +66,6 @@ async function exists(target: string): Promise<boolean> {
   }
 }
 
-async function unlinkIfExists(target: string): Promise<void> {
-  try {
-    await unlink(target);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-}
-
 /**
  * Shared lookup used by all three transfer handlers: resolves paths, loads the
  * sidecar and performs the same lazy expiry cleanup as app.py.
@@ -96,8 +89,8 @@ async function resolveStoredFile(
   }
 
   if (metadata.isExpired) {
-    await unlinkIfExists(filePath);
-    await unlinkIfExists(metadataPath);
+    await removeIfExists(filePath);
+    await removeIfExists(metadataPath);
     await deleteThumbnail(metadata.fileId);
     throw new HttpError(404, "File expired");
   }
@@ -129,12 +122,17 @@ export async function downloadFile(
   if (inline && !forceDownload) {
     headers["Content-Disposition"] = "inline";
   } else {
-    headers["Content-Disposition"] = `attachment; filename*=UTF-8''${pythonQuote(metadata.filename)}`;
+    // app.py: urlquote(metadata.filename, safe="") -- slashes are encoded too.
+    headers["Content-Disposition"] = `attachment; filename*=UTF-8''${pythonQuote(metadata.filename, "")}`;
   }
 
   await withMetadataLock(async () => {
     // Re-read under the lock so the increment is based on the latest state.
-    const fresh = (await FileMetadata.fromFile(metadataPath)) ?? metadata;
+    // If the sidecar disappeared in the meantime the file was deleted: skip the
+    // write instead of resurrecting it (app.py's `or metadata` fallback did
+    // recreate a sidecar for a file that no longer exists).
+    const fresh = await FileMetadata.fromFile(metadataPath);
+    if (!fresh) return;
     if (inline && !forceDownload) {
       fresh.views += 1;
       fresh.lastViewedAt = now;
