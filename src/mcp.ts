@@ -14,6 +14,15 @@ import { z } from "zod";
 import { config } from "./config.js";
 import { HttpError } from "./errors.js";
 import { filterSortPaginateFiles } from "./files.js";
+import {
+  FolderError,
+  createFolder,
+  createFolderFromZip,
+  deleteFolder,
+  getFolderInfo,
+  listFolders,
+  requireFolder,
+} from "./folders.js";
 import { readLimitedBody, removeIfExists } from "./fsutil.js";
 import { logEvent } from "./logger.js";
 import {
@@ -25,7 +34,7 @@ import {
   listActiveFiles,
   validateTtl,
 } from "./storage.js";
-import type { FileListPage, PublicFileMetadata, UploadResult } from "./types.js";
+import type { FileListPage, FolderListPage, PublicFileMetadata, PublicFolder, UploadResult } from "./types.js";
 import { SERVICE_VERSION } from "./version.js";
 
 function maxSizeMessage(): string {
@@ -56,6 +65,7 @@ export async function uploadFile(
   filename: string,
   contentBase64: string,
   ttl = 0,
+  folderId: string | null = null,
 ): Promise<UploadResult> {
   let validTtl: number;
   try {
@@ -87,6 +97,17 @@ export async function uploadFile(
     throw new Error("Empty file");
   }
 
+  let canonicalFolder: string | null = null;
+  if (folderId) {
+    try {
+      canonicalFolder = (await requireFolder(folderId)).folder_id;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logEvent("mcp_upload_failed", { filename, error: message });
+      throw error instanceof FolderError ? new Error(message) : error;
+    }
+  }
+
   const fileId = randomUUID();
   const { filePath, metadataPath } = getFilePaths(fileId);
 
@@ -103,6 +124,7 @@ export async function uploadFile(
       null,
       null,
       content.length,
+      canonicalFolder,
     );
     await metadata.save(metadataPath);
 
@@ -111,6 +133,7 @@ export async function uploadFile(
       filename,
       size: content.length,
       ttl: validTtl,
+      folder_id: canonicalFolder,
     });
     return {
       url: `${config.baseUrl}/d/${fileId}/${filename}`,
@@ -130,6 +153,7 @@ export interface ListFilesOptions {
   kind?: string;
   sort?: string;
   page?: number;
+  folder_id?: string | null;
 }
 
 /** `list_files` tool implementation. */
@@ -140,6 +164,7 @@ export async function listFiles(options: ListFilesOptions = {}): Promise<FileLis
     kind: options.kind ?? "all",
     sort: options.sort ?? "date",
     page: options.page ?? 1,
+    folderId: options.folder_id ?? undefined,
   });
 }
 
@@ -166,6 +191,93 @@ export async function deleteFile(fileId: string): Promise<{ deleted: boolean }> 
   return { deleted: await deleteFileById(fileId) };
 }
 
+function asMcpError(err: unknown): never {
+  if (err instanceof FolderError) {
+    throw new Error(err.message);
+  }
+  throw err;
+}
+
+export async function mcpCreateFolder(name: string): Promise<PublicFolder> {
+  try {
+    return await createFolder(name);
+  } catch (err) {
+    asMcpError(err);
+  }
+}
+
+export async function mcpListFolders(page = 1): Promise<FolderListPage> {
+  return listFolders(page);
+}
+
+export async function mcpGetFolderInfo(folderId: string): Promise<PublicFolder> {
+  const info = await getFolderInfo(folderId);
+  if (!info) {
+    throw new Error(`Folder not found: ${folderId}`);
+  }
+  return info;
+}
+
+export async function mcpDeleteFolder(folderId: string): Promise<{ deleted: boolean; files_deleted: number }> {
+  try {
+    const result = await deleteFolder(folderId);
+    if (!result.deleted) {
+      throw new Error(`Folder not found: ${folderId}`);
+    }
+    return result;
+  } catch (err) {
+    asMcpError(err);
+  }
+}
+
+export async function mcpUploadFolder(
+  name: string,
+  contentBase64: string,
+  ttl = 0,
+): Promise<{ folder: PublicFolder; files: PublicFileMetadata[] }> {
+  const pad = base64Padding(contentBase64);
+  const estimatedSize = Math.floor((contentBase64.length * 3) / 4) - pad;
+  if (estimatedSize > config.maxMcpUploadSize) {
+    const message = maxSizeMessage();
+    logEvent("folder_upload_failed", { error: message });
+    throw new Error(message);
+  }
+  let content: Buffer;
+  try {
+    content = strictBase64Decode(contentBase64);
+  } catch (error) {
+    const message = `Invalid base64: ${(error as Error).message}`;
+    logEvent("folder_upload_failed", { error: message });
+    throw new Error(message, { cause: error });
+  }
+  if (content.length === 0) {
+    logEvent("folder_upload_failed", { error: "Empty file" });
+    throw new Error("Empty file");
+  }
+  try {
+    return await createFolderFromZip(name, content, ttl);
+  } catch (err) {
+    asMcpError(err);
+  }
+}
+
+export async function mcpDownloadFolder(
+  folderId: string,
+): Promise<{ url: string; filename: string; file_count: number }> {
+  try {
+    const info = await getFolderInfo(folderId);
+    if (!info) {
+      throw new FolderError(404, `Folder not found: ${folderId}`);
+    }
+    if (info.file_count === 0) {
+      throw new FolderError(400, "Folder is empty");
+    }
+    return { url: info.download_url, filename: `${info.name}.zip`, file_count: info.file_count };
+  } catch (err) {
+    asMcpError(err);
+  }
+}
+
 function asToolResult(value: unknown): {
   content: { type: "text"; text: string }[];
   structuredContent: Record<string, unknown>;
@@ -182,14 +294,17 @@ export function createMcpServer(): McpServer {
   server.registerTool(
     "upload_file",
     {
-      description: "Upload a file encoded in base64 with TTL in seconds (0 = never expires).",
+      description:
+        "Upload a file encoded in base64 with TTL in seconds (0 = never expires). Optional folder_id places the file in that folder.",
       inputSchema: {
         filename: z.string(),
         content_base64: z.string(),
         ttl: z.number().int().optional(),
+        folder_id: z.string().optional(),
       },
     },
-    async ({ filename, content_base64, ttl }) => asToolResult(await uploadFile(filename, content_base64, ttl ?? 0)),
+    async ({ filename, content_base64, ttl, folder_id }) =>
+      asToolResult(await uploadFile(filename, content_base64, ttl ?? 0, folder_id ?? null)),
   );
 
   server.registerTool(
@@ -199,15 +314,17 @@ export function createMcpServer(): McpServer {
         "List active (non-expired) files with metadata, filtered and paginated.\n\n" +
         "Supports search by name/substring (q), filter by file type (kind: all/image/document/video/archive),\n" +
         "sorting (sort: date/name/size/expiry), and pagination (page, returns up to 50 items per page).\n" +
-        "To look up a specific file by its unique ID, use the separate get_file_info(file_id) tool.",
+        "To look up a specific file by its unique ID, use the separate get_file_info(file_id) tool.\n" +
+        "Optional folder_id filters to one folder; use folder_id=root for files not in any folder.",
       inputSchema: {
         q: z.string().optional(),
         kind: z.string().optional(),
         sort: z.string().optional(),
         page: z.number().int().optional(),
+        folder_id: z.string().optional(),
       },
     },
-    async ({ q, kind, sort, page }) => asToolResult(await listFiles({ q, kind, sort, page })),
+    async ({ q, kind, sort, page, folder_id }) => asToolResult(await listFiles({ q, kind, sort, page, folder_id })),
   );
 
   server.registerTool(
@@ -235,6 +352,66 @@ export function createMcpServer(): McpServer {
       inputSchema: { file_id: z.string() },
     },
     async ({ file_id }) => asToolResult(await deleteFile(file_id)),
+  );
+
+  server.registerTool(
+    "create_folder",
+    {
+      description: "Create an empty folder.",
+      inputSchema: { name: z.string() },
+    },
+    async ({ name }) => asToolResult(await mcpCreateFolder(name)),
+  );
+
+  server.registerTool(
+    "list_folders",
+    {
+      description: "List folders with file counts, paginated.",
+      inputSchema: { page: z.number().int().optional() },
+    },
+    async ({ page }) => asToolResult(await mcpListFolders(page ?? 1)),
+  );
+
+  server.registerTool(
+    "get_folder_info",
+    {
+      description: "Get metadata for a specific folder.",
+      inputSchema: { folder_id: z.string() },
+    },
+    async ({ folder_id }) => asToolResult(await mcpGetFolderInfo(folder_id)),
+  );
+
+  server.registerTool(
+    "delete_folder",
+    {
+      description: "Delete a folder and all files inside it.",
+      inputSchema: { folder_id: z.string() },
+    },
+    async ({ folder_id }) => asToolResult(await mcpDeleteFolder(folder_id)),
+  );
+
+  server.registerTool(
+    "upload_folder",
+    {
+      description:
+        "Upload a zip encoded in base64. Creates a folder, extracts each file as an independent item (TTL 0 = never expires).",
+      inputSchema: {
+        name: z.string(),
+        content_base64: z.string(),
+        ttl: z.number().int().optional(),
+      },
+    },
+    async ({ name, content_base64, ttl }) => asToolResult(await mcpUploadFolder(name, content_base64, ttl ?? 0)),
+  );
+
+  server.registerTool(
+    "download_folder",
+    {
+      description:
+        "Get an authenticated download URL for a zip of the folder. Fetch the URL with X-API-Key. Fails if the folder is empty.",
+      inputSchema: { folder_id: z.string() },
+    },
+    async ({ folder_id }) => asToolResult(await mcpDownloadFolder(folder_id)),
   );
 
   return server;

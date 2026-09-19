@@ -103,6 +103,7 @@
   .renew-chip{background:#0f0f0f;border:1px solid #3b82f6;color:#93c5fd;border-radius:999px;padding:4px 10px;font-size:.72rem;cursor:pointer}
   .renew-chip:hover{background:rgba(59,130,246,.15)}
   .file-actions{display:flex;gap:6px;flex-shrink:0}
+  [hidden]{display:none!important}
   .btn-icon{background:#262626;border:1px solid #333;border-radius:8px;padding:8px 10px;cursor:pointer;font-size:.85rem;color:#e5e5e5;transition:all .15s;text-decoration:none;display:inline-flex;align-items:center;gap:4px}
   .btn-icon:hover{background:#333;border-color:#444}
   .btn-icon svg{width:14px;height:14px}
@@ -113,6 +114,14 @@
   .btn-icon.danger-confirm{background:#7f1d1d;border-color:#ef4444;color:#fecaca}
   .file-thumb{width:44px;height:44px;object-fit:cover;border-radius:8px;flex-shrink:0;border:1px solid #333;background:#262626}
   .empty-state{text-align:center;color:#525252;padding:32px;font-size:.9rem}
+  .folder-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:18px}
+  .breadcrumb{font-size:.85rem;color:#a3a3a3;flex:1}
+  .breadcrumb button{background:none;border:none;color:#60a5fa;cursor:pointer;font-size:.85rem;padding:0}
+  .folder-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .folder-list{margin-top:14px}
+  .folder-card{background:#1a1a1a;border:1px solid #262626;border-radius:12px;padding:14px 16px;margin-bottom:10px;display:flex;align-items:center;gap:12px;cursor:pointer}
+  .folder-card:hover{border-color:#3b82f6}
+  .folder-card .file-actions{margin-left:auto}
 
   .pagination{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:20px;padding:8px 0}
   .page-btn{background:#262626;border:1px solid #333;border-radius:8px;padding:8px 16px;color:#e5e5e5;cursor:pointer;font-size:.85rem;transition:all .15s}
@@ -166,6 +175,16 @@
     </select>
     <button class="btn-upload" id="btnUpload" disabled>Enviar</button>
   </div>
+
+  <div class="folder-bar">
+    <div class="breadcrumb" id="breadcrumb">TmpUp</div>
+    <div class="folder-actions">
+      <button class="btn-upload" id="btnNewFolder" type="button">Nova pasta</button>
+      <button class="btn-icon" id="btnDownloadFolder" type="button" hidden>Baixar pasta</button>
+      <button class="btn-icon danger" id="btnDeleteFolder" type="button" hidden>Excluir pasta</button>
+    </div>
+  </div>
+  <div class="folder-list" id="folderList"></div>
 
   <div class="progress-wrap" id="progressWrap">
     <div class="progress-bar-bg"><div class="progress-bar" id="progressBar"></div></div>
@@ -247,8 +266,16 @@
   const prevPageBtn = document.getElementById('prevPageBtn');
   const nextPageBtn = document.getElementById('nextPageBtn');
   const pageInfo = document.getElementById('pageInfo');
+  const folderList = document.getElementById('folderList');
+  const breadcrumb = document.getElementById('breadcrumb');
+  const btnNewFolder = document.getElementById('btnNewFolder');
+  const btnDownloadFolder = document.getElementById('btnDownloadFolder');
+  const btnDeleteFolder = document.getElementById('btnDeleteFolder');
 
   let selectedFiles = [];
+  let currentFolderId = null;
+  let currentFolderName = '';
+  let displayedFolders = [];
   let displayedFiles = [];    // items of current page (max 50)
   let currentSummary = { total: 0, total_size_bytes: 0, expiring_soon_count: 0 };
   let currentPage = 1;
@@ -262,6 +289,7 @@
   let renewingId = null;      // renew popover state
   let searchDebounceTimer = null;
   let loadFilesRequestId = 0;
+  let loadFoldersRequestId = 0;
 
   // --- Drag & Drop ---
   ['dragenter','dragover'].forEach(e => dropzone.addEventListener(e, ev => { ev.preventDefault(); dropzone.classList.add('dragover'); }));
@@ -321,6 +349,7 @@
         xhr.open('POST', '/api/upload');
         xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name));
         xhr.setRequestHeader('X-TTL', ttl);
+        if(currentFolderId) xhr.setRequestHeader('X-Folder-Id', currentFolderId);
         xhr.upload.addEventListener('progress', ev => {
           if(ev.lengthComputable) {
             const pct = Math.round((ev.loaded / ev.total) * 100);
@@ -356,6 +385,7 @@
         q: currentQuery.trim(),
         kind: currentFilter,
         sort: currentSort,
+        folder_id: currentFolderId || 'root',
       });
       const res = await fetch(`/api/files?${params.toString()}`);
       if(requestId !== loadFilesRequestId) return;
@@ -385,10 +415,57 @@
         expiring_soon_count: data.expiring_soon_count || 0,
       };
       render();
+      loadFolders();
     } catch(e) {
       if(requestId !== loadFilesRequestId) return;
       fileList.innerHTML = '<div class="empty-state">Erro ao carregar arquivos</div>';
     }
+  }
+
+  async function loadFolders() {
+    const requestId = ++loadFoldersRequestId;
+    if(currentFolderId) {
+      displayedFolders = [];
+      folderList.innerHTML = '';
+      btnNewFolder.hidden = true;
+      btnDownloadFolder.hidden = false;
+      btnDeleteFolder.hidden = false;
+      breadcrumb.innerHTML = `<button type="button" data-action="root">TmpUp</button> / ${esc(currentFolderName)}`;
+      return;
+    }
+    btnNewFolder.hidden = false;
+    btnDownloadFolder.hidden = true;
+    btnDeleteFolder.hidden = true;
+    breadcrumb.textContent = 'TmpUp';
+    try {
+      const res = await fetch('/api/folders');
+      if(requestId !== loadFoldersRequestId) return;
+      if(!res.ok) { folderList.innerHTML = ''; return; }
+      const data = await res.json();
+      if(requestId !== loadFoldersRequestId) return;
+      displayedFolders = Array.isArray(data.items) ? data.items : [];
+      renderFolders(displayedFolders);
+    } catch(e) {
+      if(requestId !== loadFoldersRequestId) return;
+      folderList.innerHTML = '';
+    }
+  }
+
+  function renderFolders(items) {
+    if(!items.length) { folderList.innerHTML = ''; return; }
+    folderList.innerHTML = items.map(f => `
+      <div class="folder-card" data-action="open-folder" data-id="${esc(f.id)}" data-name="${esc(f.name)}">
+        <span class="file-icon">&#128193;</span>
+        <div class="file-info">
+          <div class="file-name">${esc(f.name)}</div>
+          <div class="file-meta">${f.file_count} arquivo(s) &middot; ${formatSize(f.total_size_bytes || 0)}</div>
+        </div>
+      </div>`).join('');
+  }
+
+  function isPreviewable(name) {
+    const ext = (name.split('.').pop() || '').toLowerCase();
+    return ['png','jpg','jpeg','gif','webp','svg','bmp','ico','tiff','avif','mp4','mov','avi','mkv','webm','mp3','wav','ogg','m4a','aac','flac','opus','pdf'].includes(ext);
   }
 
   function render() {
@@ -424,7 +501,7 @@
       const thumbOrIcon = f.is_image
         ? `<img class="file-thumb" src="${esc(f.url.replace('/d/', '/t/'))}" alt="${esc(f.filename)}" loading="lazy">`
         : `<span class="file-icon">${icon}</span>`;
-      const openBtn = f.is_image
+      const openBtn = isPreviewable(f.filename)
         ? `<a class="btn-icon" href="${esc(f.view_url)}" target="_blank" title="Visualizar">&#128065; Ver</a>`
         : `<a class="btn-icon" href="${esc(f.url)}" target="_blank" title="Abrir">&#128279;</a>`;
       const isConfirming = confirmingId === f.id;
@@ -523,6 +600,71 @@
     const id = el.dataset.id;
     if(el.checked) selectedIds.add(id); else selectedIds.delete(id);
     renderBulkBar();
+  });
+
+  folderList.addEventListener('click', ev => {
+    const card = ev.target.closest('[data-action="open-folder"]');
+    if(!card) return;
+    currentFolderId = card.dataset.id;
+    currentFolderName = card.dataset.name || '';
+    currentPage = 1;
+    selectedIds.clear();
+    loadFiles();
+  });
+
+  breadcrumb.addEventListener('click', ev => {
+    const btn = ev.target.closest('[data-action="root"]');
+    if(!btn) return;
+    currentFolderId = null;
+    currentFolderName = '';
+    currentPage = 1;
+    selectedIds.clear();
+    loadFiles();
+  });
+
+  btnNewFolder.addEventListener('click', async () => {
+    const name = window.prompt('Nome da pasta');
+    if(!name || !name.trim()) return;
+    try {
+      const res = await fetch('/api/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      if(!res.ok) {
+        let msg = 'Erro ao criar pasta';
+        try { msg = (await res.json()).detail || msg; } catch(e) {}
+        showToast(msg);
+        return;
+      }
+      showToast('Pasta criada');
+      loadFiles();
+    } catch(e) {
+      showToast('Erro ao criar pasta');
+    }
+  });
+
+  btnDownloadFolder.addEventListener('click', () => {
+    if(!currentFolderId) return;
+    if(totalFiles === 0) { showToast('Pasta vazia'); return; }
+    window.location.href = `/api/folders/${currentFolderId}/download`;
+  });
+
+  btnDeleteFolder.addEventListener('click', async () => {
+    if(!currentFolderId) return;
+    if(!window.confirm(`Apagar a pasta "${currentFolderName}" e todos os arquivos de dentro?`)) return;
+    try {
+      const res = await fetch(`/api/folders/${currentFolderId}`, { method: 'DELETE' });
+      if(!res.ok) { showToast('Erro ao excluir pasta'); return; }
+      showToast('Pasta excluida');
+      currentFolderId = null;
+      currentFolderName = '';
+      currentPage = 1;
+      selectedIds.clear();
+      loadFiles();
+    } catch(e) {
+      showToast('Erro ao excluir pasta');
+    }
   });
 
   // --- Filters / search / sort ---

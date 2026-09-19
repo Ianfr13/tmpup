@@ -4,7 +4,7 @@
  * Ported 1:1 from app.py \`_filter_sort_paginate_files\` (1235-1281).
  */
 import { config } from "./config.js";
-import { fileKind } from "./storage.js";
+import { fileKind, parseFileId } from "./storage.js";
 import type { FileListPage, PublicFileMetadata } from "./types.js";
 
 export interface FilterSortPaginateOptions {
@@ -12,6 +12,8 @@ export interface FilterSortPaginateOptions {
   kind?: string | null;
   sort?: string | null;
   page?: number | null;
+  /** undefined = no folder filter; "root" = files without a folder; uuid = that folder. */
+  folderId?: string | null;
 }
 
 function compare(a: number | string, b: number | string): number {
@@ -25,6 +27,21 @@ export function filterSortPaginateFiles(
   opts: FilterSortPaginateOptions = {},
 ): FileListPage {
   let items = [...allFiles];
+
+  const folderFilter = opts.folderId === undefined || opts.folderId === null ? null : String(opts.folderId).trim();
+  if (folderFilter) {
+    if (folderFilter.toLowerCase() === "root") {
+      items = items.filter((f) => !f.folder_id);
+    } else {
+      let canonicalFolder = folderFilter;
+      try {
+        canonicalFolder = parseFileId(folderFilter);
+      } catch {
+        canonicalFolder = folderFilter;
+      }
+      items = items.filter((f) => f.folder_id === canonicalFolder);
+    }
+  }
 
   const targetKind = (opts.kind || "all").trim().toLowerCase();
   if (targetKind !== "all") {

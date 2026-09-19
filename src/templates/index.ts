@@ -41,18 +41,18 @@ export function pythonFormat(template: string, vars: Record<string, string>): st
 
 export interface ViewerPageVars {
   filename: string;
-  imageUrl: string;
+  mediaHtml: string;
   downloadUrl: string;
   imageUrlAbsJson: string;
   fileIdJson: string;
   expiryText: string;
 }
 
-/** Render the image viewer page exactly like `_view_file` does. */
+/** Render the media viewer page. */
 export function renderViewerPage(vars: ViewerPageVars): string {
   return pythonFormat(VIEWER_TEMPLATE, {
     filename: vars.filename,
-    image_url: vars.imageUrl,
+    media_html: vars.mediaHtml,
     download_url: vars.downloadUrl,
     image_url_abs_json: vars.imageUrlAbsJson,
     file_id_json: vars.fileIdJson,

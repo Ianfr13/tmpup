@@ -24,6 +24,10 @@ import type { FileMetadataData, PublicFileMetadata } from "./types.js";
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "tiff", "avif"]);
 const DOC_EXTENSIONS = new Set(["pdf", "doc", "docx", "txt"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "mov", "avi", "mkv", "webm"]);
+const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "ogg", "m4a", "aac", "flac", "opus"]);
+
+/** In-browser preview kind for `/v/` (null → 307 to `/d/`). */
+export type PreviewKind = "image" | "video" | "audio" | "pdf";
 
 const THUMB_SUFFIXES = [".thumb.jpg", ".thumb.fail"] as const;
 /** Sidecar suffix (Python's `DATA_DIR.glob("*.meta.json")`). */
@@ -95,6 +99,7 @@ export class FileMetadata {
   lastViewedAt: number | null;
   lastDownloadedAt: number | null;
   sizeBytes: number;
+  folderId: string | null;
 
   constructor(
     fileId: string,
@@ -106,6 +111,7 @@ export class FileMetadata {
     lastViewedAt: number | null = null,
     lastDownloadedAt: number | null = null,
     sizeBytes = 0,
+    folderId: string | null = null,
   ) {
     this.fileId = fileId;
     this.filename = filename;
@@ -116,6 +122,7 @@ export class FileMetadata {
     this.lastViewedAt = lastViewedAt;
     this.lastDownloadedAt = lastDownloadedAt;
     this.sizeBytes = sizeBytes;
+    this.folderId = folderId;
   }
 
   get expiresAt(): number {
@@ -137,7 +144,7 @@ export class FileMetadata {
   }
 
   toDict(): FileMetadataData {
-    return {
+    const data: FileMetadataData = {
       file_id: this.fileId,
       filename: this.filename,
       ttl: this.ttl,
@@ -148,9 +155,21 @@ export class FileMetadata {
       last_downloaded_at: this.lastDownloadedAt,
       size_bytes: this.sizeBytes,
     };
+    if (this.folderId) {
+      data.folder_id = this.folderId;
+    }
+    return data;
   }
 
   static fromDict(data: FileMetadataData): FileMetadata {
+    let folderId: string | null = null;
+    if (typeof data.folder_id === "string" && data.folder_id.length > 0) {
+      try {
+        folderId = parseFileId(data.folder_id);
+      } catch {
+        folderId = null;
+      }
+    }
     return new FileMetadata(
       data.file_id,
       data.filename,
@@ -161,6 +180,7 @@ export class FileMetadata {
       data.last_viewed_at !== undefined ? data.last_viewed_at : null,
       data.last_downloaded_at !== undefined ? data.last_downloaded_at : null,
       data.size_bytes !== undefined ? data.size_bytes : 0,
+      folderId,
     );
   }
 
@@ -299,6 +319,7 @@ export async function fileMetaDict(metadata: FileMetadata): Promise<PublicFileMe
     downloads: metadata.downloads,
     last_viewed_at: metadata.lastViewedAt,
     last_downloaded_at: metadata.lastDownloadedAt,
+    folder_id: metadata.folderId ?? null,
   };
 }
 
@@ -680,4 +701,22 @@ export function fileKind(filename: string): string {
     return "video";
   }
   return "archive";
+}
+
+/** In-browser preview kind, or null when `/v/` should redirect to `/d/`. */
+export function previewKind(filename: string): PreviewKind | null {
+  if (isImageFile(filename)) {
+    return "image";
+  }
+  const ext = fileExtension(filename);
+  if (VIDEO_EXTENSIONS.has(ext)) {
+    return "video";
+  }
+  if (AUDIO_EXTENSIONS.has(ext)) {
+    return "audio";
+  }
+  if (ext === "pdf") {
+    return "pdf";
+  }
+  return null;
 }

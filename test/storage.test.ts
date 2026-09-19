@@ -215,6 +215,7 @@ describe("FileMetadata", () => {
         "downloads",
         "last_viewed_at",
         "last_downloaded_at",
+        "folder_id",
       ].sort(),
     );
     expect(metaDict).toMatchObject({

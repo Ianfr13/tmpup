@@ -23,6 +23,8 @@ import {
   getFilePaths,
   isImageFile,
   parseFileId,
+  previewKind,
+  type PreviewKind,
   withMetadataLock,
 } from "../storage.js";
 import { pythonQuote } from "../url.js";
@@ -193,14 +195,28 @@ export async function downloadFile(
   return { filePath, mediaType: contentType, headers };
 }
 
-/** `_view_file`: HTML viewer for images, 307 redirect to the raw file otherwise. */
+function mediaHtmlFor(kind: PreviewKind, escapedUrl: string, escapedFilename: string): string {
+  if (kind === "image") {
+    return `<img class="viewer-img" src="${escapedUrl}" alt="${escapedFilename}">`;
+  }
+  if (kind === "video") {
+    return `<video class="viewer-media" src="${escapedUrl}" controls playsinline></video>`;
+  }
+  if (kind === "audio") {
+    return `<audio class="viewer-media" src="${escapedUrl}" controls></audio>`;
+  }
+  return `<iframe class="viewer-pdf" src="${escapedUrl}" title="${escapedFilename}"></iframe>`;
+}
+
+/** `_view_file`: HTML viewer for image/video/audio/PDF, 307 to `/d/` otherwise. */
 export async function viewFile(
   fileId: string,
   filename = "",
 ): Promise<HtmlDescriptor | RedirectDescriptor> {
   const { metadata } = await resolveStoredFile(fileId);
+  const kind = previewKind(metadata.filename);
 
-  if (!isImageFile(metadata.filename)) {
+  if (!kind) {
     // Starlette's RedirectResponse quotes the URL before writing the header
     // (urllib's quote with this safe set), so non-ASCII/spaced names are
     // encoded exactly like app.py did.
@@ -211,14 +227,14 @@ export async function viewFile(
   }
 
   const safeFilename = escapeHtml(metadata.filename);
-  const imageUrl = escapeHtml(`/d/${fileId}/${metadata.filename}`, true);
+  const mediaUrl = escapeHtml(`/d/${fileId}/${metadata.filename}`, true);
   const downloadUrl = escapeHtml(`/d/${fileId}/${metadata.filename}?dl=1`, true);
   const imageUrlAbs = `${config.baseUrl}/d/${fileId}/${metadata.filename}`;
 
   return {
     html: renderViewerPage({
       filename: safeFilename,
-      imageUrl,
+      mediaHtml: mediaHtmlFor(kind, mediaUrl, safeFilename),
       downloadUrl,
       imageUrlAbsJson: jsonForScript(imageUrlAbs),
       fileIdJson: jsonForScript(fileId),

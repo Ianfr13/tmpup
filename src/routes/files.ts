@@ -13,6 +13,11 @@ import { HttpError } from "../errors.js";
 import { readLimitedBody, removeIfExists } from "../fsutil.js";
 import { filterSortPaginateFiles } from "../files.js";
 import {
+  FolderError,
+  requireFolder,
+  setFileFolder,
+} from "../folders.js";
+import {
   FileMetadata,
   deleteFileById,
   extendFileTtl,
@@ -124,6 +129,7 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       q?: string | string[];
       kind?: string | string[];
       sort?: string | string[];
+      folder_id?: string | string[];
     };
   }>("/api/files", async (request) => {
     const allFiles = await listActiveFiles();
@@ -132,6 +138,7 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       kind: firstValue(request.query.kind) ?? "all",
       sort: firstValue(request.query.sort) ?? "date",
       page: parsePage(firstValue(request.query.page)),
+      folderId: firstValue(request.query.folder_id),
     });
   });
 
@@ -149,6 +156,29 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       throw new HttpError(404, "File not found");
     }
     return { deleted: true };
+  });
+
+  app.patch<{ Params: { file_id: string } }>("/api/files/:file_id", async (request) => {
+    const body = await readJsonBody(request);
+    if (typeof body !== "object" || body === null || Array.isArray(body) || !("folder_id" in body)) {
+      throw new HttpError(400, "'folder_id' field is required");
+    }
+    const rawFolderId = (body as { folder_id: unknown }).folder_id;
+    if (rawFolderId !== null && typeof rawFolderId !== "string") {
+      throw new HttpError(400, "'folder_id' must be a string or null");
+    }
+    try {
+      const updated = await setFileFolder(request.params.file_id, rawFolderId);
+      if (updated === null) {
+        throw new HttpError(404, "File not found");
+      }
+      return updated;
+    } catch (error) {
+      if (error instanceof FolderError) {
+        throw new HttpError(error.statusCode, error.message);
+      }
+      throw error;
+    }
   });
 
   app.patch<{ Params: { file_id: string } }>("/api/files/:file_id/ttl", async (request) => {
@@ -200,6 +230,20 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       throw new HttpError(400, (error as Error).message);
     }
 
+    const rawFolderId = firstValue(request.headers["x-folder-id"]);
+    let folderId: string | null = null;
+    if (rawFolderId) {
+      try {
+        const folder = await requireFolder(rawFolderId);
+        folderId = folder.folder_id;
+      } catch (error) {
+        if (error instanceof FolderError) {
+          throw new HttpError(error.statusCode, error.message);
+        }
+        throw error;
+      }
+    }
+
     const fileId = randomUUID();
     const { filePath, metadataPath } = getFilePaths(fileId);
 
@@ -223,6 +267,7 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
         null,
         null,
         totalWritten,
+        folderId,
       );
       await metadata.save(metadataPath);
 

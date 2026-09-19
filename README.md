@@ -43,11 +43,18 @@ npm start           # node dist/main.js (produção)
 | GET | `/health` | Health check (público) |
 | GET | `/auth/login`, `/auth/google`, `/auth/callback`, `/auth/logout` | Login Google (públicos) |
 | GET | `/api/me` | Email da sessão atual |
-| GET | `/api/files` | Lista paginada (`page`, `q`, `kind`, `sort`) |
+| GET | `/api/files` | Lista paginada (`page`, `q`, `kind`, `sort`, `folder_id`; `root` = sem pasta) |
 | GET | `/api/files/:id` | Metadados de um arquivo |
+| PATCH | `/api/files/:id` | Move arquivo (`{"folder_id": uuid \| null}`) |
 | DELETE | `/api/files/:id` | Remove arquivo + sidecar + thumbnail |
 | PATCH | `/api/files/:id/ttl` | Renova/atualiza TTL (`{"ttl": 3600}`, `0` = nunca expira) |
-| POST | `/api/upload` | Upload cru (headers `X-Filename` url-encoded, `X-TTL`) |
+| POST | `/api/upload` | Upload cru (headers `X-Filename` url-encoded, `X-TTL`, opcional `X-Folder-Id`) |
+| POST | `/api/folders` | Cria pasta (`{"name": "..."}`) |
+| GET | `/api/folders` | Lista pastas |
+| GET | `/api/folders/:id` | Metadados da pasta |
+| DELETE | `/api/folders/:id` | Apaga pasta e todos os arquivos de dentro |
+| POST | `/api/folders/:id/upload` | Extrai zip cru para a pasta (`X-TTL`) |
+| GET | `/api/folders/:id/download` | Zip da pasta (auth) |
 | GET | `/d/:id/:filename` | Download/view do arquivo (`?dl=1` força attachment) |
 | GET | `/v/:id/:filename` | Viewer HTML (imagens) ou redirect 307 |
 | GET | `/t/:id/:filename` | Thumbnail JPEG (cache imutável, fallback = original) |
@@ -59,7 +66,7 @@ Todas as rotas exigem sessão (cookie) ou `X-API-Key`, exceto `/health`, as rota
 ## MCP
 
 Servidor MCP montado em `/mcp` (POST, Streamable HTTP, stateless), com as ferramentas
-`upload_file`, `list_files`, `get_file_info`, `extend_ttl` e `delete_file`.
+`upload_file`, `list_files`, `get_file_info`, `extend_ttl`, `delete_file`, `create_folder`, `list_folders`, `get_folder_info`, `delete_folder`, `upload_folder` e `download_folder`.
 Clientes se autenticam com o header `X-API-Key: <chave de TMPUP_API_KEYS>`:
 
 ```json

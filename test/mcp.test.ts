@@ -32,6 +32,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
+import { zipSync } from "fflate";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -42,6 +43,10 @@ import {
   getFileInfo,
   listFiles,
   mcp,
+  mcpCreateFolder,
+  mcpDeleteFolder,
+  mcpDownloadFolder,
+  mcpUploadFolder,
   uploadFile,
 } from "../src/mcp.js";
 import { FileMetadata, extendFileTtl } from "../src/storage.js";
@@ -484,7 +489,19 @@ describe("MCP over real HTTP", () => {
 
       const tools = await call({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
       const names = (tools.json.result as { tools: { name: string }[] }).tools.map((t) => t.name);
-      expect(names).toEqual(["upload_file", "list_files", "get_file_info", "extend_ttl", "delete_file"]);
+      expect(names).toEqual([
+        "upload_file",
+        "list_files",
+        "get_file_info",
+        "extend_ttl",
+        "delete_file",
+        "create_folder",
+        "list_folders",
+        "get_folder_info",
+        "delete_folder",
+        "upload_folder",
+        "download_folder",
+      ]);
 
       const toolsCall = await call({
         jsonrpc: "2.0",
@@ -518,6 +535,33 @@ describe("MCP over real HTTP", () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+describe("mcp folder tools", () => {
+  it("uploads a zip folder and downloads metadata", async () => {
+    const zip = Buffer.from(zipSync({ "n.txt": new TextEncoder().encode("n") })).toString("base64");
+    const uploaded = await mcpUploadFolder("from-mcp", zip, 0);
+    expect(uploaded.files).toHaveLength(1);
+    expect(uploaded.folder.name).toBe("from-mcp");
+
+    const listed = await listFiles({ folder_id: uploaded.folder.id });
+    expect(listed.items).toHaveLength(1);
+
+    const dl = await mcpDownloadFolder(uploaded.folder.id);
+    expect(dl.file_count).toBe(1);
+    expect(dl.url).toContain("/api/folders/");
+
+    const removed = await mcpDeleteFolder(uploaded.folder.id);
+    expect(removed.deleted).toBe(true);
+    expect(removed.files_deleted).toBe(1);
+  });
+
+  it("upload_file accepts folder_id", async () => {
+    const folder = await mcpCreateFolder("box");
+    const res = await uploadFile("in.txt", Buffer.from("z").toString("base64"), 0, folder.id);
+    const info = await getFileInfo(res.id);
+    expect(info.folder_id).toBe(folder.id);
   });
 });
 

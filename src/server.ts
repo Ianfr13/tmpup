@@ -13,6 +13,7 @@ import { HttpError } from "./errors.js";
 import { registerMcpRoutes } from "./mcp.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerFileRoutes } from "./routes/files.js";
+import { registerFolderRoutes } from "./routes/folders.js";
 import { registerPageRoutes } from "./routes/pages.js";
 import { registerTransferRoutes } from "./routes/transfer.js";
 
@@ -80,6 +81,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
 
   await registerAuthRoutes(app);
   await registerFileRoutes(app);
+  await registerFolderRoutes(app);
   await registerTransferRoutes(app);
   await registerPageRoutes(app);
   await registerMcpRoutes(app);
