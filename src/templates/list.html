@@ -374,9 +374,10 @@
   // --- File list & folders (real API) ---
   async function loadFiles(append) {
     const requestId = ++loadFilesRequestId;
-    if(!append) currentPage = 1;
+    const targetPage = append ? currentPage + 1 : 1;
+    if(append) loadMoreBtn.disabled = true;
     try {
-      let query = `stack=1&kind=${encodeURIComponent(currentKind)}&page=${currentPage}`;
+      let query = `stack=1&kind=${encodeURIComponent(currentKind)}&page=${targetPage}`;
       if(currentQuery) {
         query += `&q=${encodeURIComponent(currentQuery)}&sort=date`;
       } else if(loc === 'expiring') {
@@ -392,14 +393,21 @@
       const data = await res.json();
       if(requestId !== loadFilesRequestId) return;
       if(!data || !Array.isArray(data.items)) throw new Error('invalid_data');
+      currentPage = targetPage;
       totalPages = data.total_pages || 0;
       currentSummary = data.total || 0;
       displayedFiles = append ? displayedFiles.concat(data.items) : data.items;
+      if(!append) {
+        const visibleIds = new Set(displayedFiles.map(f => f.id));
+        for(const id of selectedIds) if(!visibleIds.has(id)) selectedIds.delete(id);
+      }
       render();
     } catch(e) {
       if(requestId !== loadFilesRequestId) return;
       logError('load_files_failed', e);
-      fileList.innerHTML = '<div class="empty-state">Erro ao carregar arquivos</div>';
+      if(!append) fileList.innerHTML = '<div class="empty-state">Erro ao carregar arquivos</div>';
+    } finally {
+      if(requestId === loadFilesRequestId) loadMoreBtn.disabled = false;
     }
   }
 
@@ -429,7 +437,9 @@
     countAll.textContent = rootCount + foldersSum;
     summaryBar.textContent = `${rootCount + foldersSum} arquivos · ${formatSize(sizeSum)}`;
     renderFolders();
-    destSelect.innerHTML = '<option value="">Sem pasta</option>' + folderOptions(isFolder(loc) ? loc : destSelect.value);
+    const preserved = displayedFolders.some(f => f.id === destSelect.value) ? destSelect.value : '';
+    destSelect.innerHTML = '<option value="">Sem pasta</option>' + folderOptions(preserved);
+    destSelect.value = preserved;
     locSelect.innerHTML = '<option value="all">Tudo</option><option value="root">Sem pasta</option><option value="expiring">Com validade</option>' + folderOptions(loc);
     locSelect.value = (!currentQuery && (loc === 'all' || loc === 'root' || loc === 'expiring' || displayedFolders.some(f => f.id === loc))) ? loc : '';
     renderFiles();
@@ -485,7 +495,7 @@
       viewTitle.textContent = folderName();
     }
     titleCount.textContent = `${currentSummary} ${currentSummary === 1 ? 'item' : 'itens'}`;
-    const inFolder = isFolder(loc);
+    const inFolder = isFolder(loc) && !searchInput.value && !currentQuery;
     if(inFolder) {
       breadcrumb.innerHTML = '<button type="button" data-nav="all">Tudo</button> &nbsp;/&nbsp;';
       breadcrumb.style.display = 'inline-flex';
@@ -654,11 +664,18 @@
     renderBulkBar();
   });
 
+  function clearSelectionAndPanels() {
+    selectedIds.clear();
+    openVersions.clear();
+    openPanelId = null;
+    confirmingId = null;
+  }
+
   function navigate(newLoc) {
     loc = newLoc;
     searchInput.value = '';
     currentQuery = '';
-    selectedIds.clear();
+    clearSelectionAndPanels();
     destSelect.value = isFolder(loc) ? loc : '';
     updateSidebarNav();
     loadFiles();
@@ -703,13 +720,14 @@
   });
 
   btnDownloadFolder.addEventListener('click', () => {
-    if(!isFolder(loc)) return;
-    if(currentSummary === 0) { showToast('Pasta vazia'); return; }
+    if(!isFolder(loc) || searchInput.value || currentQuery) return;
+    const f = displayedFolders.find(fo => fo.id === loc);
+    if(!f || !f.file_count) { showToast('Pasta vazia'); return; }
     window.location.href = `/api/folders/${loc}/download`;
   });
 
   btnDeleteFolder.addEventListener('click', async () => {
-    if(!isFolder(loc)) return;
+    if(!isFolder(loc) || searchInput.value || currentQuery) return;
     if(!window.confirm(`Apagar a pasta "${folderName()}" e todos os arquivos de dentro?`)) return;
     try {
       const res = await fetch(`/api/folders/${loc}`, { method: 'DELETE' });
@@ -728,17 +746,17 @@
   });
 
   loadMoreBtn.addEventListener('click', () => {
-    if(currentPage < totalPages) {
-      currentPage++;
+    if(currentPage < totalPages && !loadMoreBtn.disabled) {
       loadFiles(true);
     }
   });
 
   searchInput.addEventListener('input', () => {
+    renderTitleRow();
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = setTimeout(() => {
       currentQuery = searchInput.value.trim();
-      selectedIds.clear();
+      clearSelectionAndPanels();
       updateSidebarNav();
       loadFiles();
     }, 300);
@@ -756,7 +774,7 @@
     if(!chip) return;
     currentKind = chip.dataset.kind;
     chipRow.querySelectorAll('.chip').forEach(c => c.classList.toggle('active', c === chip));
-    selectedIds.clear();
+    clearSelectionAndPanels();
     renderBulkBar();
     loadFiles();
   });

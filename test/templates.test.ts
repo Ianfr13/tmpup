@@ -221,4 +221,13 @@ describe("frontend template contracts (painel de trabalho)", () => {
     expect(HTML_TEMPLATE).toContain("function renderFolderWidgets(");
     expect(HTML_TEMPLATE).toContain("document.hidden");
   });
+
+  it("pins state handling contracts for folder actions, load more, dest select, selection, and panels", () => {
+    expect(HTML_TEMPLATE).not.toContain("currentSummary === 0");
+    expect(HTML_TEMPLATE).toContain("loadMoreBtn.disabled = true");
+    expect(HTML_TEMPLATE).not.toMatch(/loadMoreBtn[^}]*currentPage\+\+/);
+    expect(HTML_TEMPLATE).not.toContain("isFolder(loc) ? loc : destSelect.value");
+    expect(HTML_TEMPLATE).toContain("visibleIds");
+    expect(HTML_TEMPLATE).toContain("openVersions.clear()");
+  });
 });
