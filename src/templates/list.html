@@ -82,7 +82,13 @@
   .badge-other{background:#e9ecf0;color:#2f3640}
   .file-thumb{width:28px;height:28px;object-fit:cover;border-radius:4px;display:block}
   .ver-chip{background:#e3e8ff;color:#27348b;border:none;border-radius:999px;font-size:11px;font-weight:700;padding:1px 7px;cursor:pointer;flex-shrink:0}
-  .folder-chip{background:#f3e3c2;color:#5a3d05;border-radius:999px;font-size:11px;font-weight:600;padding:1px 7px;white-space:nowrap;flex-shrink:0}
+  .folder-chip{background:#f3e3c2;color:#5a3d05;border-radius:999px;font-size:11px;font-weight:600;padding:1px 7px;white-space:nowrap;flex-shrink:0;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+  .more-panel{display:flex;align-items:center;gap:10px;padding:6px 12px;background:#f7f8fb;border-bottom:1px solid #eceff3;font-size:12px;color:#454c57;flex-wrap:wrap}
+  .panel-select{border:1px solid #cfd5dc;border-radius:6px;padding:3px 6px;font-size:12px;background:#fff;color:#1a1d21}
+  .bulk-select{border:1px solid #454c57;border-radius:6px;padding:4px 8px;font-size:12px;background:#2a2e33;color:#fff}
+  #locSelect{display:none}
+  @media (max-width: 1000px){.cell-size,.cell-exp,.cell-views,.col-size,.col-exp,.col-views{display:none}}
+  @media (max-width: 760px){.sidebar{display:none}#locSelect{display:block;width:100%;height:36px;border:1px solid #cfd5dc;border-radius:6px;padding:0 8px;font-size:13px;background:#fff;color:#1a1d21;margin-bottom:4px}}
   .btn-copy-link{background:#1d4ed8;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}.btn-copy-link:hover{background:#1e40af}.btn-copy-link.copied{background:#15803d}
   .renew-row{display:flex;gap:4px;padding:4px 12px;background:#f7f8fb;border-bottom:1px solid #eceff3}
   .renew-chip{background:#fff;border:1px solid #cfd5dc;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer}.renew-chip:hover{background:#e3e8ff;border-color:#1d4ed8}
@@ -127,6 +133,7 @@
     <div class="progress-wrap" id="progressWrap"><div class="progress-bar" id="progressBar"></div></div>
     <div class="progress-text" id="progressText" style="display:none"></div>
     <div class="status" id="status"></div>
+    <select id="locSelect" aria-label="Navegação"><option value="all">Tudo</option><option value="root">Sem pasta</option><option value="expiring">Com validade</option></select>
     <div class="title-row">
       <div class="breadcrumb" id="breadcrumb"></div><h1 class="title-h1" id="viewTitle">Tudo</h1><span class="title-count" id="titleCount">0 arquivos</span>
       <div class="folder-actions" id="folderActions"><button class="btn-sub" id="btnDownloadFolder" type="button" hidden>Baixar .zip</button><button class="btn-sub danger" id="btnDeleteFolder" type="button" hidden>Excluir pasta</button></div>
@@ -143,13 +150,15 @@
     <div class="bulk-bar" id="bulkBar">
       <span id="bulkCount">0 selecionado(s)</span>
       <div class="spacer"></div>
-      <button class="bulk-btn" id="bulkRenewBtn" type="button">Renovar</button>
+      <select class="bulk-select" id="bulkMoveSelect" aria-label="Mover para pasta"><option value="" disabled selected>Mover para pasta</option><option value="root">Sem pasta</option></select>
+      <button class="bulk-btn" id="bulkCopyBtn" type="button">Copiar links</button>
+      <button class="bulk-btn" id="bulkRenewBtn" type="button">Nunca expira</button>
       <button class="bulk-btn danger" id="bulkDeleteBtn" type="button">Excluir</button>
-      <button class="bulk-cancel" id="bulkCancelBtn" type="button">cancelar</button>
+      <button class="bulk-cancel" id="bulkCancelBtn" type="button">Cancelar</button>
     </div>
     <div class="list-card">
       <div class="list-header">
-        <span style="width:18px"></span><span style="width:84px">Enviado</span><span style="width:46px">Tipo</span><span style="flex:1">Nome</span><span style="width:78px;text-align:right">Tamanho</span><span style="width:64px;text-align:right">Expira</span><span style="width:52px;text-align:right">Vistas</span><span style="width:138px"></span>
+        <span style="width:18px"></span><span style="width:84px">Enviado</span><span style="width:46px">Tipo</span><span style="flex:1">Nome</span><span class="col-size" style="width:78px;text-align:right">Tamanho</span><span class="col-exp" style="width:64px;text-align:right">Expira</span><span class="col-views" style="width:52px;text-align:right">Vistas</span><span style="width:138px"></span>
       </div>
       <div class="file-list-body" id="fileList"></div>
       <button class="load-more-btn" id="loadMoreBtn" type="button" style="display:none">Carregar mais antigos</button>
@@ -187,6 +196,9 @@
   const sidebar = document.getElementById('sidebar');
   const countAll = document.getElementById('countAll');
   const countRoot = document.getElementById('countRoot');
+  const locSelect = document.getElementById('locSelect');
+  const bulkMoveSelect = document.getElementById('bulkMoveSelect');
+  const bulkCopyBtn = document.getElementById('bulkCopyBtn');
 
   let loc = 'all';
   let currentFolderName = '';
@@ -201,8 +213,8 @@
   let currentQuery = '';
   let selectedIds = new Set();
   let openVersions = new Set();
+  let openPanelId = null;
   let confirmingId = null;
-  let renewingId = null;
   let searchDebounceTimer = null;
   let loadFilesRequestId = 0;
   let loadFoldersRequestId = 0;
@@ -394,6 +406,7 @@
       renderFolders();
       updateDestSelect();
       updateSidebarCounts();
+      updateLocSelect();
     } catch(e) {
       if(requestId !== loadFoldersRequestId) return;
       logError('load_folders_failed', e);
@@ -426,6 +439,13 @@
     sidebar.querySelectorAll('.folder-item').forEach(btn => {
       btn.classList.toggle('active', !currentQuery && btn.dataset.id === loc);
     });
+    updateLocSelect();
+  }
+
+  function updateLocSelect() {
+    locSelect.innerHTML = '<option value="all">Tudo</option><option value="root">Sem pasta</option><option value="expiring">Com validade</option>' +
+      displayedFolders.map(f => `<option value="${esc(f.id)}">${esc(f.name)}</option>`).join('');
+    locSelect.value = (!currentQuery && (loc === 'all' || loc === 'root' || loc === 'expiring' || displayedFolders.some(f => f.id === loc))) ? loc : '';
   }
 
   function renderFolders() {
@@ -510,11 +530,20 @@
         : `<span class="type-badge badge-${deriveKind(f.filename, f.is_image)}">${esc((f.filename.split('.').pop() || '').toUpperCase().slice(0, 4))}</span>`;
       const hasVersions = Array.isArray(f.versions) && f.versions.length > 0;
       const verChip = hasVersions ? `<button class="ver-chip" data-action="toggle-ver" data-id="${esc(f.id)}" type="button">${f.versions.length + 1} versões</button>` : '';
+      const folderChipHtml = row.folderChip ? `<span class="folder-chip" title="${esc(row.folderChip)}">${esc(row.folderChip)}</span>` : '';
       const remaining = formatCountdown(f.expires_in), soon = f.expires_in > 0 && f.expires_in < 3600;
       const viewsStr = f.views ? `${f.views}×` : '—';
       const viewsTitle = `${f.downloads || 0} download(s) · última visualização: ${formatLast(f.last_viewed_at)}`;
-      const renewRow = (renewingId === f.id) ? `<div class="renew-row"><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="3600" type="button">1 hora</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="86400" type="button">24 horas</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="604800" type="button">7 dias</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="0" type="button">Nunca expira</button></div>` : '';
-      let html = `<div class="list-row"><span class="cell-check"><input class="select-box" type="checkbox" data-action="select" data-id="${esc(f.id)}" ${selectedIds.has(f.id) ? 'checked' : ''} aria-label="Selecionar arquivo"></span><span class="cell-time">${formatTime(f.created_at || 0, row.insideDay)}</span><span class="cell-type">${thumbOrBadge}</span><div class="cell-name"><a class="row-name" href="${esc(targetUrl)}" target="_blank" rel="noopener" title="${esc(f.filename)}">${esc(f.filename)}</a>${verChip}</div><span class="cell-size">${formatSize(f.size || 0)}</span><span class="cell-exp ${soon ? 'soon' : ''}" data-action="renew-toggle" data-id="${esc(f.id)}" style="cursor:pointer" title="Renovar validade">${remaining}</span><span class="cell-views" title="${esc(viewsTitle)}">${viewsStr}</span><span class="cell-actions"><button class="btn-copy-link" data-action="copy" data-url="${esc(f.url)}" type="button">Copiar link</button></span></div>${renewRow}`;
+      let panelRow = '';
+      if(openPanelId === f.id) {
+        const isConfirming = confirmingId === f.id;
+        const delBtn = isConfirming
+          ? `<button class="btn-sub-action danger-confirm" data-action="delete" data-id="${esc(f.id)}" type="button">Excluir?</button>`
+          : `<button class="btn-sub-action danger" data-action="delete" data-id="${esc(f.id)}" type="button">Excluir</button>`;
+        const folderOpts = displayedFolders.map(fo => `<option value="${esc(fo.id)}" ${f.folder_id === fo.id ? 'selected' : ''}>${esc(fo.name)}</option>`).join('');
+        panelRow = `<div class="more-panel" data-panel-id="${esc(f.id)}"><a class="btn-sub-action" href="${esc(f.url)}" download="${esc(f.filename)}">Baixar</a><label style="display:inline-flex;align-items:center;gap:4px">Mover para <select class="panel-select" data-action="move-file" data-id="${esc(f.id)}"><option value="" ${!f.folder_id ? 'selected' : ''}>Sem pasta</option>${folderOpts}</select></label><span style="color:#5c6470">Validade:</span><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="3600" type="button">1 hora</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="86400" type="button">24 horas</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="604800" type="button">7 dias</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="0" type="button">Nunca expira</button>${delBtn}</div>`;
+      }
+      let html = `<div class="list-row"><span class="cell-check"><input class="select-box" type="checkbox" data-action="select" data-id="${esc(f.id)}" ${selectedIds.has(f.id) ? 'checked' : ''} aria-label="Selecionar arquivo"></span><span class="cell-time">${formatTime(f.created_at || 0, row.insideDay)}</span><span class="cell-type">${thumbOrBadge}</span><div class="cell-name"><a class="row-name" href="${esc(targetUrl)}" target="_blank" rel="noopener" title="${esc(f.filename)}">${esc(f.filename)}</a>${verChip}${folderChipHtml}</div><span class="cell-size">${formatSize(f.size || 0)}</span><span class="cell-exp ${soon ? 'soon' : ''}" data-action="renew-toggle" data-id="${esc(f.id)}" style="cursor:pointer" title="Renovar validade">${remaining}</span><span class="cell-views" title="${esc(viewsTitle)}">${viewsStr}</span><span class="cell-actions"><button class="btn-copy-link" data-action="copy" data-url="${esc(f.url)}" type="button">Copiar link</button><button class="btn-sub-action btn-more" data-action="toggle-more" data-id="${esc(f.id)}" aria-label="Mais ações" type="button"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button></span></div>${panelRow}`;`;
       if(hasVersions && openVersions.has(f.id)) {
         for(const v of f.versions) {
           const isConfirming = confirmingId === v.id;
@@ -528,10 +557,17 @@
     }).join('');
   }
 
+  function updateBulkMoveSelect() {
+    bulkMoveSelect.innerHTML = '<option value="" disabled selected>Mover para pasta</option><option value="root">Sem pasta</option>' +
+      displayedFolders.map(f => `<option value="${esc(f.id)}">${esc(f.name)}</option>`).join('');
+    bulkMoveSelect.value = '';
+  }
+
   function renderBulkBar() {
     if(selectedIds.size > 0) {
       bulkBar.classList.add('active');
       bulkCount.textContent = `${selectedIds.size} selecionado(s)`;
+      updateBulkMoveSelect();
     } else {
       bulkBar.classList.remove('active');
     }
@@ -559,15 +595,15 @@
       return;
     }
 
-    if(action === 'renew-toggle') {
-      renewingId = renewingId === id ? null : id;
-      render();
+    if(action === 'toggle-more' || action === 'renew-toggle') {
+      openPanelId = (openPanelId === id ? null : id);
+      confirmingId = null;
+      renderFiles();
       return;
     }
 
     if(action === 'renew-apply') {
       const ttl = parseInt(btn.dataset.ttl, 10);
-      renewingId = null;
       try {
         const res = await fetch(`/api/files/${id}/ttl`, {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttl })
@@ -586,21 +622,53 @@
         confirmingId = null;
         try {
           const res = await fetch(`/api/files/${id}`, { method: 'DELETE' });
-          if(res.ok) { showToast('Arquivo removido'); selectedIds.delete(id); await loadFiles(); }
-          else { logError('delete_file_failed', res.statusText, id); showToast('Erro ao excluir'); }
+          if(res.ok) {
+            showToast('Arquivo removido');
+            selectedIds.delete(id);
+            if(openPanelId === id) openPanelId = null;
+            await loadFiles();
+            await loadFolders();
+          } else {
+            logError('delete_file_failed', res.statusText, id);
+            showToast('Erro ao excluir');
+          }
         } catch(e) {
           logError('delete_file_failed', e, id);
           showToast('Erro ao excluir');
         }
       } else {
         confirmingId = id;
-        render();
+        renderFiles();
       }
       return;
     }
   });
 
-  fileList.addEventListener('change', ev => {
+  fileList.addEventListener('change', async ev => {
+    const moveSelect = ev.target.closest('[data-action="move-file"]');
+    if(moveSelect) {
+      const id = moveSelect.dataset.id;
+      const folder_id = moveSelect.value || null;
+      try {
+        const res = await fetch(`/api/files/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder_id })
+        });
+        if(res.ok) {
+          showToast('Arquivo movido');
+          await loadFiles();
+          await loadFolders();
+        } else {
+          logError('move_file_failed', res.statusText, id);
+          showToast('Erro ao mover');
+        }
+      } catch(err) {
+        logError('move_file_failed', err, id);
+        showToast('Erro ao mover');
+      }
+      return;
+    }
     const el = ev.target.closest('[data-action="select"]');
     if(!el) return;
     const id = el.dataset.id;
@@ -718,14 +786,69 @@
     currentKind = chip.dataset.kind;
     chipRow.querySelectorAll('.chip').forEach(c => c.classList.toggle('active', c === chip));
     currentPage = 1;
+    selectedIds.clear();
+    renderBulkBar();
     loadFiles();
   });
 
   // --- Bulk actions ---
+  locSelect.addEventListener('change', () => { if(locSelect.value) navigate(locSelect.value); });
   document.getElementById('bulkCancelBtn').addEventListener('click', () => { selectedIds.clear(); render(); });
+  bulkMoveSelect.addEventListener('change', async () => {
+    const target = bulkMoveSelect.value;
+    if(!target) return;
+    const targetFolder = target === 'root' ? null : target;
+    const ids = Array.from(selectedIds);
+    if(!ids.length) return;
+    const responses = await Promise.all(ids.map(id => fetch(`/api/files/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_id: targetFolder })
+    }).catch(err => { logError('bulk_move_failed', err, id); return null; })));
+    let successCount = 0;
+    responses.forEach((res, i) => {
+      if(res && res.ok) {
+        successCount++;
+        selectedIds.delete(ids[i]);
+      } else if(res) {
+        logError('bulk_move_failed', res.statusText, ids[i]);
+      }
+    });
+    if(successCount === ids.length) {
+      showToast(`${ids.length} arquivo(s) movidos`);
+    } else {
+      showToast(`${successCount} de ${ids.length} movidos`);
+    }
+    bulkMoveSelect.value = '';
+    renderBulkBar();
+    await loadFiles();
+    await loadFolders();
+  });
+  bulkCopyBtn.addEventListener('click', () => {
+    const ids = Array.from(selectedIds);
+    if(!ids.length) return;
+    const urls = ids.map(id => {
+      const f = displayedFiles.find(x => x.id === id);
+      if(!f || !f.url) return null;
+      return f.url.startsWith('http') ? f.url : window.location.origin + f.url;
+    }).filter(Boolean);
+    const text = urls.join('\n');
+    if(!text) return;
+    navigator.clipboard.writeText(text).then(() => showToast('Links copiados')).catch(err => {
+      try {
+        const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
+        ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+        showToast('Links copiados');
+      } catch(e) {
+        logError('copy_failed', err || e);
+        showToast('Erro ao copiar links');
+      }
+    });
+  });
   document.getElementById('bulkDeleteBtn').addEventListener('click', async () => {
     const ids = Array.from(selectedIds);
     if(!ids.length) return;
+    if(!window.confirm(`Excluir ${ids.length} arquivo(s) selecionado(s)?`)) return;
     const responses = await Promise.all(ids.map(id => fetch(`/api/files/${id}`, { method: 'DELETE' }).catch(err => { logError('bulk_delete_failed', err, id); return null; })));
     let successCount = 0;
     responses.forEach((res, i) => {
@@ -743,6 +866,7 @@
     }
     renderBulkBar();
     await loadFiles();
+    await loadFolders();
   });
   document.getElementById('bulkRenewBtn').addEventListener('click', async () => {
     const ids = Array.from(selectedIds);
@@ -798,13 +922,22 @@
     return 'other';
   }
 
+  function resolveFolderChip(file, folders, view, query) {
+    const isSearch = Boolean(query && String(query).trim());
+    const isExpiring = view === 'expiring';
+    if(!isSearch && !isExpiring) return null;
+    if(!file || !file.folder_id) return null;
+    const match = (folders || []).find(fo => fo.id === file.folder_id);
+    return match ? match.name : (file.folder_name || null);
+  }
+
   function buildRows({ files, folders, view, kind, query, allLoaded, now }) {
     const fileList = files || [], folderList = folders || [], q = (query || '').trim().toLowerCase();
     if(q) {
       const match = (!kind || kind === 'all') ? folderList.filter(fo => (fo.name || '').toLowerCase().includes(q)) : [];
-      return [...match.map(fo => ({ type: 'folder', ...fo, folder: fo, insideDay: false })), ...fileList.map(f => ({ type: 'file', ...f, file: f, insideDay: false }))];
+      return [...match.map(fo => ({ type: 'folder', ...fo, folder: fo, insideDay: false })), ...fileList.map(f => ({ type: 'file', ...f, file: f, folderChip: resolveFolderChip(f, folderList, view, q), insideDay: false }))];
     }
-    if(view && view !== 'all' && view !== 'root') return fileList.map(f => ({ type: 'file', ...f, file: f, insideDay: false }));
+    if(view && view !== 'all' && view !== 'root') return fileList.map(f => ({ type: 'file', ...f, file: f, folderChip: resolveFolderChip(f, folderList, view, q), insideDay: false }));
     let eligible = [];
     if((view === 'all' || !view) && (!kind || kind === 'all')) {
       const oldest = fileList.length > 0 ? Math.min(...fileList.map(f => f.created_at)) : null;
@@ -835,7 +968,8 @@
       const summary = parts.join(' · ');
       rows.push({ type: 'day', label: dayLabel(g.date), summary, sub: summary });
       for(const entry of g.entries) {
-        rows.push({ type: entry.type, ...entry.data, [entry.type]: entry.data, insideDay: true });
+        const extra = entry.type === 'file' ? { folderChip: resolveFolderChip(entry.data, folderList, view, q) } : {};
+        rows.push({ type: entry.type, ...entry.data, [entry.type]: entry.data, ...extra, insideDay: true });
       }
     }
     return rows;
@@ -879,7 +1013,7 @@
   function showToast(msg) { toast.textContent = msg; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2000); }
 
   setInterval(() => {
-    if(currentPage === 1 && selectedIds.size === 0 && !confirmingId && !renewingId && openVersions.size === 0) {
+    if(currentPage === 1 && selectedIds.size === 0 && !confirmingId && !openPanelId && openVersions.size === 0) {
       loadFiles();
       loadFolders();
     }

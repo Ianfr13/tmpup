@@ -15,10 +15,11 @@ function loadPureHelpers() {
 describe("list client pure helpers (buildRows)", () => {
   const now = new Date(2026, 9, 1, 12, 0, 0); // 1 out 2026
 
-  it("finds marker range in list.html and exports buildRows and deriveKind", () => {
+  it("finds marker range in list.html and exports buildRows, deriveKind and resolveFolderChip", () => {
     const h = loadPureHelpers();
     expect(typeof h.buildRows).toBe("function");
     expect(typeof h.deriveKind).toBe("function");
+    expect(typeof h.resolveFolderChip).toBe("function");
   });
 
   describe("day grouping in all / root views", () => {
@@ -91,23 +92,30 @@ describe("list client pure helpers (buildRows)", () => {
   });
 
   describe("search view", () => {
-    it("places matching folders first before file rows, without day headers", () => {
+    it("places matching folders first before file rows, without day headers, and attaches folder chips to files", () => {
       const { buildRows } = loadPureHelpers();
-      const files = [{ id: "f1", filename: "report-september.pdf", created_at: 10000 }, { id: "f2", filename: "september-notes.txt", created_at: 9000 }];
+      const files = [{ id: "f1", filename: "report-september.pdf", created_at: 10000, folder_id: "d1" }, { id: "f2", filename: "september-notes.txt", created_at: 9000 }];
       const folders = [{ id: "d1", name: "september-data", updated_at: 8000 }, { id: "d2", name: "other-stuff", updated_at: 12000 }];
       const rows = buildRows({ files, folders, view: "all", kind: "all", query: "september", allLoaded: true, now });
       expect(rows.some((r: any) => r.type === "day")).toBe(false);
       expect(rows.map((r: any) => `${r.type}:${r.name || r.filename}`)).toEqual(["folder:september-data", "file:report-september.pdf", "file:september-notes.txt"]);
+      expect(rows.find((r: any) => r.id === "f1")?.folderChip).toBe("september-data");
+      expect(rows.find((r: any) => r.id === "f2")?.folderChip).toBeFalsy();
     });
   });
 
   describe("other views (folder id, expiring)", () => {
-    it("renders files directly with no day headers for expiring and folder views", () => {
+    it("renders files directly with no day headers for expiring and folder views, adding folder chips only in expiring", () => {
       const { buildRows } = loadPureHelpers();
-      const files = [{ id: "f1", filename: "a.txt", created_at: 10000 }];
+      const files = [{ id: "f1", filename: "a.txt", created_at: 10000, folder_id: "d1" }];
       const folders = [{ id: "d1", name: "d1", updated_at: 10000 }];
-      expect(buildRows({ files, folders, view: "expiring", kind: "all", query: "", allLoaded: true, now }).some((r: any) => r.type === "day")).toBe(false);
-      expect(buildRows({ files, folders, view: "uuid-1234", kind: "all", query: "", allLoaded: true, now }).some((r: any) => r.type === "day")).toBe(false);
+      const expRows = buildRows({ files, folders, view: "expiring", kind: "all", query: "", allLoaded: true, now });
+      expect(expRows.some((r: any) => r.type === "day")).toBe(false);
+      expect(expRows.find((r: any) => r.id === "f1")?.folderChip).toBe("d1");
+
+      const folderRows = buildRows({ files, folders, view: "uuid-1234", kind: "all", query: "", allLoaded: true, now });
+      expect(folderRows.some((r: any) => r.type === "day")).toBe(false);
+      expect(folderRows.find((r: any) => r.id === "f1")?.folderChip).toBeFalsy();
     });
   });
 
@@ -125,6 +133,44 @@ describe("list client pure helpers (buildRows)", () => {
       expect(deriveKind("script.json", false)).toBe("document");
       expect(deriveKind("archive.zip", false)).toBe("other");
       expect(deriveKind("app.exe", false)).toBe("other");
+    });
+  });
+
+  describe("resolveFolderChip pure helper", () => {
+    it("returns folder name in expiring view when file belongs to a folder", () => {
+      const { resolveFolderChip } = loadPureHelpers();
+      const folders = [{ id: "d1", name: "Projetos" }];
+      expect(resolveFolderChip({ folder_id: "d1" }, folders, "expiring", "")).toBe("Projetos");
+    });
+
+    it("returns folder name in search view when file belongs to a folder", () => {
+      const { resolveFolderChip } = loadPureHelpers();
+      const folders = [{ id: "d1", name: "Projetos" }];
+      expect(resolveFolderChip({ folder_id: "d1" }, folders, "all", "relatorio")).toBe("Projetos");
+      expect(resolveFolderChip({ folder_id: "d1" }, folders, "root", "  relatorio  ")).toBe("Projetos");
+    });
+
+    it("returns null when file does not belong to a folder", () => {
+      const { resolveFolderChip } = loadPureHelpers();
+      const folders = [{ id: "d1", name: "Projetos" }];
+      expect(resolveFolderChip({ folder_id: null }, folders, "expiring", "")).toBeNull();
+      expect(resolveFolderChip({}, folders, "expiring", "")).toBeNull();
+      expect(resolveFolderChip(null, folders, "expiring", "")).toBeNull();
+      expect(resolveFolderChip({ folder_id: null }, folders, "all", "query")).toBeNull();
+    });
+
+    it("returns null in non-search, non-expiring views even if file has folder_id", () => {
+      const { resolveFolderChip } = loadPureHelpers();
+      const folders = [{ id: "d1", name: "Projetos" }];
+      expect(resolveFolderChip({ folder_id: "d1" }, folders, "all", "")).toBeNull();
+      expect(resolveFolderChip({ folder_id: "d1" }, folders, "root", "")).toBeNull();
+      expect(resolveFolderChip({ folder_id: "d1" }, folders, "d1", "")).toBeNull();
+    });
+
+    it("falls back to file.folder_name if folder is missing from folders list", () => {
+      const { resolveFolderChip } = loadPureHelpers();
+      expect(resolveFolderChip({ folder_id: "d1", folder_name: "Fallback" }, [], "expiring", "")).toBe("Fallback");
+      expect(resolveFolderChip({ folder_id: "d1" }, [], "expiring", "")).toBeNull();
     });
   });
 });

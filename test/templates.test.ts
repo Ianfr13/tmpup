@@ -170,6 +170,23 @@ describe("frontend template contracts (painel de trabalho)", () => {
   it("contains structured logging for error branches", () => {
     expect(HTML_TEMPLATE).toContain("tmpup-web");
     expect(HTML_TEMPLATE).toContain("console.error");
+    expect(HTML_TEMPLATE).toContain("move_file_failed");
+    expect(HTML_TEMPLATE).toContain("bulk_move_failed");
+    expect(HTML_TEMPLATE).toContain("copy_failed");
+  });
+
+  it("pins locSelect, Mover para and Copiar links as required by spec", () => {
+    expect(HTML_TEMPLATE).toContain('id="locSelect"');
+    expect(HTML_TEMPLATE).toContain("Mover para");
+    expect(HTML_TEMPLATE).toContain("Copiar links");
+    expect(HTML_TEMPLATE).toContain('aria-label="Mais ações"');
+    expect(HTML_TEMPLATE).toContain("Nunca expira");
+  });
+
+  it("pins responsive rules for 1000px and 760px breakpoints and folder chip styling", () => {
+    expect(HTML_TEMPLATE).toMatch(/@media[^{]*max-width:\s*1000px/);
+    expect(HTML_TEMPLATE).toMatch(/@media[^{]*max-width:\s*760px/);
+    expect(HTML_TEMPLATE).toContain("220px");
   });
 
   it("pins the absence of emoji entities (&#1...)", () => {
