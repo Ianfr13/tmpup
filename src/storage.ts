@@ -288,23 +288,30 @@ export function getFilePaths(fileId: unknown): { filePath: string; metadataPath:
   };
 }
 
+/** Resolve the file's size in bytes, falling back to disk stat for legacy sidecars. */
+export async function resolveFileSize(metadata: FileMetadata): Promise<number> {
+  let sizeBytes = metadata.sizeBytes || 0;
+  if (sizeBytes <= 0) {
+    try {
+      const { filePath } = getFilePaths(metadata.fileId);
+      sizeBytes = (await fsp.stat(filePath)).size;
+    } catch (err) {
+      // A missing blob or an invalid legacy id counts as 0 bytes; anything else is a real I/O failure.
+      if (!isNotFound(err) && !(err instanceof Error && err.message.startsWith("Invalid file ID"))) {
+        throw err;
+      }
+      logEvent("file_stat_failed", { file_id: metadata.fileId, err: errorMessage(err) });
+      sizeBytes = 0;
+    }
+  }
+  return sizeBytes;
+}
+
 /** Format FileMetadata into its public metadata dictionary. */
 export async function fileMetaDict(metadata: FileMetadata): Promise<PublicFileMetadata> {
   // The id is used verbatim in the public dict, like app.py's _file_meta_dict.
   const fileId = metadata.fileId;
-  let sizeBytes = metadata.sizeBytes || 0;
-  if (sizeBytes <= 0) {
-    try {
-      const { filePath } = getFilePaths(fileId);
-      sizeBytes = (await fsp.stat(filePath)).size;
-    } catch (err) {
-      if (isNotFound(err) || (err instanceof Error && err.message.startsWith("Invalid file ID"))) {
-        sizeBytes = 0;
-      } else {
-        throw err;
-      }
-    }
-  }
+  const sizeBytes = await resolveFileSize(metadata);
 
   return {
     id: fileId,

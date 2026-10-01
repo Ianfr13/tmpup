@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { Script } from "node:vm";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -111,7 +112,7 @@ describe("page entry points", () => {
     expect(renderLoginPage()).toBe(LOGIN_HTML);
   });
 });
-describe("frontend template contracts (ported from test_app.py)", () => {
+describe("frontend template contracts (painel de trabalho)", () => {
   it("uses the /t/ thumbnail route instead of the raw /d/ url", () => {
     expect(
       HTML_TEMPLATE.includes('replace("/d/", "/t/")') || HTML_TEMPLATE.includes("replace('/d/', '/t/')"),
@@ -119,31 +120,121 @@ describe("frontend template contracts (ported from test_app.py)", () => {
     expect(HTML_TEMPLATE).not.toContain('<img class="file-thumb" src="${esc(f.url)}"');
   });
 
-  it("contains pagination UI and client-side logic", () => {
-    expect(HTML_TEMPLATE).toContain("Anterior");
-    expect(HTML_TEMPLATE).toContain("Proxima");
-    expect(HTML_TEMPLATE).toContain("prevPageBtn");
-    expect(HTML_TEMPLATE).toContain("nextPageBtn");
-    expect(HTML_TEMPLATE.includes("/api/files?") || HTML_TEMPLATE.includes("URLSearchParams")).toBe(true);
-    expect(HTML_TEMPLATE).toContain("currentPage = 1");
+  it("ships an inline script that parses (a syntax error blanks the whole page)", () => {
+    const start = HTML_TEMPLATE.lastIndexOf("<script>") + "<script>".length;
+    const source = HTML_TEMPLATE.slice(start, HTML_TEMPLATE.lastIndexOf("</script>"));
+    expect(() => new Script(source)).not.toThrow();
   });
 
-  it("contains search debounce, request token and page clamp", () => {
-    expect(HTML_TEMPLATE).toContain("searchDebounceTimer");
-    expect(HTML_TEMPLATE).toContain("clearTimeout(searchDebounceTimer)");
-    expect(HTML_TEMPLATE).toContain("setTimeout");
-    expect(HTML_TEMPLATE).toContain("300");
-    expect(HTML_TEMPLATE).toContain("loadFilesRequestId");
-    expect(HTML_TEMPLATE).toContain("requestId !== loadFilesRequestId");
-    expect(HTML_TEMPLATE).toContain("Math.min(currentPage");
-    expect(
-      HTML_TEMPLATE.includes("currentPage > validPage") ||
-        HTML_TEMPLATE.includes("currentPage !== validPage"),
-    ).toBe(true);
-  });
-
-  it("links to the MCP setup page", () => {
+  it("links to the MCP setup page and auth logout", () => {
     expect(HTML_TEMPLATE).toContain('href="/mcp-setup"');
     expect(HTML_TEMPLATE).toContain("MCP");
+    expect(HTML_TEMPLATE).toContain('href="/auth/logout"');
+    expect(HTML_TEMPLATE).toContain("Sair");
+  });
+
+  it("pins header, sidebar, upload strip and title row layout elements", () => {
+    expect(HTML_TEMPLATE).toContain('id="searchInput"');
+    expect(HTML_TEMPLATE).toContain('id="summaryBar"');
+    expect(HTML_TEMPLATE).toContain('id="userEmail"');
+    expect(HTML_TEMPLATE).toContain("Tudo");
+    expect(HTML_TEMPLATE).toContain("Sem pasta");
+    expect(HTML_TEMPLATE).toContain("Com validade");
+    expect(HTML_TEMPLATE).toContain('id="btnNewFolder"');
+    expect(HTML_TEMPLATE).toContain("Filtrar pastas");
+    expect(HTML_TEMPLATE).toContain('id="folderList"');
+    expect(HTML_TEMPLATE).toContain('id="destSelect"');
+    expect(HTML_TEMPLATE).toContain('id="ttlSelect"');
+    expect(HTML_TEMPLATE).toContain('id="breadcrumb"');
+    expect(HTML_TEMPLATE).toContain('id="btnDownloadFolder"');
+    expect(HTML_TEMPLATE).toContain('id="btnDeleteFolder"');
+    expect(HTML_TEMPLATE).toContain('data-kind="all"');
+    expect(HTML_TEMPLATE).toContain('data-kind="image"');
+    expect(HTML_TEMPLATE).toContain('data-kind="document"');
+    expect(HTML_TEMPLATE).toContain('data-kind="video"');
+    expect(HTML_TEMPLATE).toContain('data-kind="archive"');
+  });
+
+  it("uses load-more pagination and removes prev/next page buttons", () => {
+    expect(HTML_TEMPLATE).toContain("Carregar mais antigos");
+    expect(HTML_TEMPLATE).toContain('id="loadMoreBtn"');
+    expect(HTML_TEMPLATE).not.toContain("prevPageBtn");
+    expect(HTML_TEMPLATE).not.toContain("nextPageBtn");
+    expect(HTML_TEMPLATE).not.toContain("Anterior");
+    expect(HTML_TEMPLATE).not.toContain("Proxima");
+  });
+
+  it("contains view navigation queries with stack=1 and expiring=1, request guard and debounce", () => {
+    expect(HTML_TEMPLATE).toContain("stack=1");
+    expect(HTML_TEMPLATE).toContain("expiring=1");
+    expect(HTML_TEMPLATE).toContain("loadFilesRequestId");
+    expect(HTML_TEMPLATE).toContain("requestId !== loadFilesRequestId");
+    expect(HTML_TEMPLATE).toContain("searchDebounceTimer");
+    expect(HTML_TEMPLATE).toContain("clearTimeout(searchDebounceTimer)");
+    expect(HTML_TEMPLATE).toContain("300");
+  });
+
+  it("contains structured logging for error branches", () => {
+    expect(HTML_TEMPLATE).toContain("tmpup-web");
+    expect(HTML_TEMPLATE).toContain("console.error");
+    expect(HTML_TEMPLATE).toContain("move_file_failed");
+    expect(HTML_TEMPLATE).toContain("bulk_move_failed");
+    expect(HTML_TEMPLATE).toContain("copy_failed");
+  });
+
+  it("pins locSelect, Mover para and Copiar links as required by spec", () => {
+    expect(HTML_TEMPLATE).toContain('id="locSelect"');
+    expect(HTML_TEMPLATE).toContain("Mover para");
+    expect(HTML_TEMPLATE).toContain("Copiar links");
+    expect(HTML_TEMPLATE).toContain('aria-label="Mais ações"');
+    expect(HTML_TEMPLATE).toContain("Nunca expira");
+  });
+
+  it("pins responsive rules for 1000px and 760px breakpoints and folder chip styling", () => {
+    expect(HTML_TEMPLATE).toMatch(/@media[^{]*max-width:\s*1000px/);
+    expect(HTML_TEMPLATE).toMatch(/@media[^{]*max-width:\s*760px/);
+    expect(HTML_TEMPLATE).toContain("220px");
+  });
+
+  it("pins the absence of emoji entities (&#1...)", () => {
+    expect(HTML_TEMPLATE).not.toContain("&#1");
+  });
+
+  it("removes dead code and derives folderName/summary without caches", () => {
+    expect(HTML_TEMPLATE).not.toContain('id="sortSelect"');
+    expect(HTML_TEMPLATE).not.toContain(".renew-row");
+    expect(HTML_TEMPLATE).not.toContain(".badge-image");
+    expect(HTML_TEMPLATE).not.toContain('id="folderActions"');
+    expect(HTML_TEMPLATE).not.toContain("btn-more");
+    expect(HTML_TEMPLATE).not.toContain("renderSummary");
+    expect(HTML_TEMPLATE).not.toContain("currentFolderName");
+    expect(HTML_TEMPLATE).not.toContain("lastRootTotalFiles");
+    expect(HTML_TEMPLATE).not.toContain("lastRootSizeBytes");
+  });
+
+  it("contains unified helpers: folderOptions, copyText, runBulk, refresh, folderName, renderFolderWidgets", () => {
+    expect(HTML_TEMPLATE).toContain("function folderOptions(");
+    expect(HTML_TEMPLATE).toContain("function copyText(");
+    expect(HTML_TEMPLATE).toContain("function runBulk(");
+    expect(HTML_TEMPLATE).toContain("function refresh(");
+    expect(HTML_TEMPLATE).toContain("function folderName(");
+    expect(HTML_TEMPLATE).toContain("function renderFolderWidgets(");
+    expect(HTML_TEMPLATE).toContain("document.hidden");
+  });
+
+  it("pins state handling contracts for folder actions, load more, dest select, selection, and panels", () => {
+    expect(HTML_TEMPLATE).not.toContain("currentSummary === 0");
+    expect(HTML_TEMPLATE).toContain("loadMoreBtn.disabled = true");
+    expect(HTML_TEMPLATE).not.toMatch(/loadMoreBtn[^}]*currentPage\+\+/);
+    expect(HTML_TEMPLATE).not.toContain("isFolder(loc) ? loc : destSelect.value");
+    expect(HTML_TEMPLATE).toContain("visibleIds");
+    expect(HTML_TEMPLATE).toContain("openVersions.clear()");
+  });
+
+  it("pins mobile folder creation, copy failure toast, responsive header/chips and folder pagination", () => {
+    expect(HTML_TEMPLATE).toContain('id="btnNewFolderMobile"');
+    expect(HTML_TEMPLATE).toContain("Não foi possível copiar");
+    expect(HTML_TEMPLATE).toContain("total_pages");
+    expect(HTML_TEMPLATE).toContain("/api/folders?page=");
   });
 });

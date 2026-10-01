@@ -46,6 +46,7 @@ import {
   mcpCreateFolder,
   mcpDeleteFolder,
   mcpDownloadFolder,
+  mcpListFolders,
   mcpUploadFolder,
   uploadFile,
 } from "../src/mcp.js";
@@ -562,6 +563,20 @@ describe("mcp folder tools", () => {
     const res = await uploadFile("in.txt", Buffer.from("z").toString("base64"), 0, folder.id);
     const info = await getFileInfo(res.id);
     expect(info.folder_id).toBe(folder.id);
+  });
+
+  it("list_folders returns root totals for files outside folders", async () => {
+    await uploadFile("standalone.txt", Buffer.from("root data").toString("base64"), 0);
+    const folder = await mcpCreateFolder("projects");
+    await uploadFile("proj.txt", Buffer.from("inside").toString("base64"), 0, folder.id);
+
+    const listing = await mcpListFolders();
+    expect(listing.items).toHaveLength(1);
+    expect(listing.items[0]?.name).toBe("projects");
+    expect(listing.root).toEqual({
+      file_count: 1,
+      total_size_bytes: Buffer.byteLength("root data"),
+    });
   });
 });
 

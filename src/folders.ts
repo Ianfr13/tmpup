@@ -20,6 +20,7 @@ import {
   fileMetaDict,
   getFilePaths,
   parseFileId,
+  resolveFileSize,
   validateTtl,
   withMetadataLock,
 } from "./storage.js";
@@ -170,10 +171,10 @@ async function listFolderRecords(): Promise<FolderMetadataData[]> {
   return records.sort((a, b) => b.created_at - a.created_at);
 }
 
-async function listMemberMetadata(folderId: string): Promise<FileMetadata[]> {
+async function scanMembersByFolder(): Promise<Map<string | null, FileMetadata[]>> {
   const dir = dataDirPath();
   const names = await readDirNames(dir);
-  const members: FileMetadata[] = [];
+  const grouped = new Map<string | null, FileMetadata[]>();
   for (const name of names) {
     if (!name.endsWith(METADATA_SUFFIX)) {
       continue;
@@ -187,29 +188,47 @@ async function listMemberMetadata(folderId: string): Promise<FileMetadata[]> {
     }
     try {
       const metadata = await FileMetadata.fromFile(path.join(dir, name));
-      if (!metadata || metadata.folderId !== folderId) {
+      if (!metadata) {
         continue;
       }
       if (parseFileId(metadata.fileId) !== canonicalSidecar) {
         continue;
       }
-      members.push(metadata);
+      const key = metadata.folderId ?? null;
+      const list = grouped.get(key);
+      if (list) {
+        list.push(metadata);
+      } else {
+        grouped.set(key, [metadata]);
+      }
     } catch {
       continue;
     }
   }
-  return members;
+  return grouped;
 }
 
-async function folderToPublic(record: FolderMetadataData): Promise<PublicFolder> {
-  const members = await listMemberMetadata(record.folder_id);
+async function listMemberMetadata(folderId: string): Promise<FileMetadata[]> {
+  const grouped = await scanMembersByFolder();
+  return grouped.get(folderId) ?? [];
+}
+
+async function sumMemberSizes(members: FileMetadata[]): Promise<number> {
+  const sizes = await Promise.all(members.map((m) => resolveFileSize(m)));
+  return sizes.reduce((sum, s) => sum + s, 0);
+}
+
+async function folderToPublic(record: FolderMetadataData, members: FileMetadata[]): Promise<PublicFolder> {
   const active = members.filter((m) => !m.isExpired);
+  const updatedAt = active.reduce((max, m) => Math.max(max, m.createdAt), 0) || record.created_at;
+  const totalSizeBytes = await sumMemberSizes(active);
   return {
     id: record.folder_id,
     name: record.name,
     created_at: record.created_at,
+    updated_at: updatedAt,
     file_count: active.length,
-    total_size_bytes: active.reduce((sum, m) => sum + (m.sizeBytes || 0), 0),
+    total_size_bytes: totalSizeBytes,
     download_url: `${config.baseUrl}/api/folders/${record.folder_id}/download`,
   };
 }
@@ -239,7 +258,7 @@ export async function createFolder(name: unknown): Promise<PublicFolder> {
       return created;
     });
     logEvent("folder_created", { folder_id: record.folder_id });
-    return folderToPublic(record);
+    return folderToPublic(record, []);
   } catch (err) {
     if (err instanceof FolderError && err.statusCode === 409) {
       logEvent("folder_create_failed", { err: err.message, reason: "duplicate_name" });
@@ -252,19 +271,28 @@ export async function createFolder(name: unknown): Promise<PublicFolder> {
 
 export async function listFolders(page = 1): Promise<FolderListPage> {
   const records = await listFolderRecords();
+  const grouped = await scanMembersByFolder();
   const pageSize = config.pageSize;
   const total = records.length;
   const totalPages = Math.ceil(total / pageSize);
   const safePage = Math.max(1, page);
   const start = (safePage - 1) * pageSize;
   const slice = records.slice(start, start + pageSize);
-  const items = await Promise.all(slice.map((record) => folderToPublic(record)));
+  const items = await Promise.all(
+    slice.map((record) => folderToPublic(record, grouped.get(record.folder_id) ?? [])),
+  );
+  const rootMembers = (grouped.get(null) ?? []).filter((m) => !m.isExpired);
+  const rootTotalSizeBytes = await sumMemberSizes(rootMembers);
   return {
     items,
     total,
     page: safePage,
     page_size: pageSize,
     total_pages: totalPages,
+    root: {
+      file_count: rootMembers.length,
+      total_size_bytes: rootTotalSizeBytes,
+    },
   };
 }
 
@@ -273,7 +301,8 @@ export async function getFolderInfo(folderId: unknown): Promise<PublicFolder | n
   if (!record) {
     return null;
   }
-  return folderToPublic(record);
+  const members = await listMemberMetadata(record.folder_id);
+  return folderToPublic(record, members);
 }
 
 export async function requireFolder(folderId: unknown): Promise<FolderMetadataData> {
