@@ -267,4 +267,64 @@ describe("folders", () => {
     });
     expect(page2.items).toHaveLength(1);
   });
+
+  it("computes root and folder total_size_bytes for legacy sidecars without size_bytes via stat fallback", async () => {
+    const now = Date.now() / 1000;
+    const writeLegacy = async (id: string, name: string, body?: string, folderId?: string) => {
+      const p = getFilePaths(id);
+      if (body !== undefined) await fsp.writeFile(p.filePath, body);
+      await fsp.writeFile(
+        p.metadataPath,
+        JSON.stringify({ file_id: id, filename: name, ttl: 0, created_at: now, folder_id: folderId }),
+      );
+      return p;
+    };
+
+    const modernId = randomUUID();
+    const modernP = getFilePaths(modernId);
+    await fsp.writeFile(modernP.filePath, "modern");
+    await new FileMetadata(modernId, "modern.txt", 0, now, 0, 0, null, null, 6).save(modernP.metadataPath);
+
+    const rootId = randomUUID();
+    const rootP = await writeLegacy(rootId, "root.txt", "legacy-root");
+    const folder = await createFolder("legacy-folder");
+    const memberId = randomUUID();
+    const memberP = await writeLegacy(memberId, "member.txt", "legacy-member", folder.id);
+    const missingId = randomUUID();
+    const missingP = await writeLegacy(missingId, "missing.txt");
+
+    const statCalls: string[] = [];
+    const origStat = fsp.stat;
+    const statSpy = vi.spyOn(fsp, "stat").mockImplementation(async (target, ...args) => {
+      statCalls.push(String(target));
+      return origStat(target, ...args);
+    });
+
+    const logged: Array<Record<string, unknown>> = [];
+    const logSpy = vi.spyOn(console, "log").mockImplementation((msg) => {
+      try {
+        logged.push(JSON.parse(String(msg)));
+      } catch {}
+    });
+
+    try {
+      const listing = await listFolders();
+      expect(listing.root.total_size_bytes).toBe(6 + 11);
+      expect(listing.root.file_count).toBe(3);
+      expect(listing.items[0]?.total_size_bytes).toBe(13);
+      expect(statCalls).toEqual(expect.arrayContaining([rootP.filePath, memberP.filePath, missingP.filePath]));
+      expect(statCalls).not.toContain(modernP.filePath);
+
+      const statFailed = logged.filter((e) => e.event === "file_stat_failed");
+      expect(statFailed).toEqual([
+        expect.objectContaining({ svc: "tmpup", event: "file_stat_failed", file_id: missingId, err: expect.any(String) }),
+      ]);
+
+      const folderInfo = await getFolderInfo(folder.id);
+      expect(folderInfo?.total_size_bytes).toBe(13);
+    } finally {
+      statSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
 });

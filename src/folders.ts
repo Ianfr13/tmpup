@@ -20,6 +20,7 @@ import {
   fileMetaDict,
   getFilePaths,
   parseFileId,
+  resolveFileSize,
   validateTtl,
   withMetadataLock,
 } from "./storage.js";
@@ -212,16 +213,22 @@ async function listMemberMetadata(folderId: string): Promise<FileMetadata[]> {
   return grouped.get(folderId) ?? [];
 }
 
-function folderToPublic(record: FolderMetadataData, members: FileMetadata[]): PublicFolder {
+async function sumMemberSizes(members: FileMetadata[]): Promise<number> {
+  const sizes = await Promise.all(members.map((m) => resolveFileSize(m)));
+  return sizes.reduce((sum, s) => sum + s, 0);
+}
+
+async function folderToPublic(record: FolderMetadataData, members: FileMetadata[]): Promise<PublicFolder> {
   const active = members.filter((m) => !m.isExpired);
   const updatedAt = active.reduce((max, m) => Math.max(max, m.createdAt), 0) || record.created_at;
+  const totalSizeBytes = await sumMemberSizes(active);
   return {
     id: record.folder_id,
     name: record.name,
     created_at: record.created_at,
     updated_at: updatedAt,
     file_count: active.length,
-    total_size_bytes: active.reduce((sum, m) => sum + (m.sizeBytes || 0), 0),
+    total_size_bytes: totalSizeBytes,
     download_url: `${config.baseUrl}/api/folders/${record.folder_id}/download`,
   };
 }
@@ -271,8 +278,11 @@ export async function listFolders(page = 1): Promise<FolderListPage> {
   const safePage = Math.max(1, page);
   const start = (safePage - 1) * pageSize;
   const slice = records.slice(start, start + pageSize);
-  const items = slice.map((record) => folderToPublic(record, grouped.get(record.folder_id) ?? []));
+  const items = await Promise.all(
+    slice.map((record) => folderToPublic(record, grouped.get(record.folder_id) ?? [])),
+  );
   const rootMembers = (grouped.get(null) ?? []).filter((m) => !m.isExpired);
+  const rootTotalSizeBytes = await sumMemberSizes(rootMembers);
   return {
     items,
     total,
@@ -281,7 +291,7 @@ export async function listFolders(page = 1): Promise<FolderListPage> {
     total_pages: totalPages,
     root: {
       file_count: rootMembers.length,
-      total_size_bytes: rootMembers.reduce((sum, m) => sum + (m.sizeBytes || 0), 0),
+      total_size_bytes: rootTotalSizeBytes,
     },
   };
 }
