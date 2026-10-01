@@ -699,7 +699,6 @@ describe("transfer routes and security", () => {
     expect(html).toContain('id="summaryBar"');
     expect(html).toContain('id="searchInput"');
     expect(html).toContain('id="chipRow"');
-    expect(html).toContain('id="sortSelect"');
     expect(html).toContain('id="bulkBar"');
     expect(html).toContain('id="bulkRenewBtn"');
     expect(html).toContain('id="bulkDeleteBtn"');

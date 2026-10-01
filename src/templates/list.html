@@ -76,7 +76,6 @@
   .cell-views{width:52px;text-align:right;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#454c57;flex-shrink:0;cursor:default}
   .cell-actions{width:138px;display:flex;justify-content:flex-end;align-items:center;gap:6px;flex-shrink:0}
   .type-badge{width:46px;height:22px;border-radius:5px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px;font-weight:700;line-height:22px;text-align:center;letter-spacing:.03em;display:inline-block}
-  .badge-image{background:#dcf5e7;color:#14532d}
   .badge-video{background:#e3e8ff;color:#27348b}
   .badge-document{background:#fdefd2;color:#7c4a03}
   .badge-other{background:#e9ecf0;color:#2f3640}
@@ -90,7 +89,6 @@
   @media (max-width: 1000px){.cell-size,.cell-exp,.cell-views,.col-size,.col-exp,.col-views{display:none}}
   @media (max-width: 760px){.sidebar,.summary-bar{display:none}#locSelect{display:block;width:100%;height:36px;border:1px solid #cfd5dc;border-radius:6px;padding:0 8px;font-size:13px;background:#fff;color:#1a1d21;margin-bottom:4px}}
   .btn-copy-link{background:#1d4ed8;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}.btn-copy-link:hover{background:#1e40af}.btn-copy-link.copied{background:#15803d}
-  .renew-row{display:flex;gap:4px;padding:4px 12px;background:#f7f8fb;border-bottom:1px solid #eceff3}
   .renew-chip{background:#fff;border:1px solid #cfd5dc;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer}.renew-chip:hover{background:#e3e8ff;border-color:#1d4ed8}
   .btn-sub-action{background:#fff;border:1px solid #dfe3e8;border-radius:6px;padding:4px 8px;font-size:12px;color:#1a1d21;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;white-space:nowrap}.btn-sub-action:hover{background:#f1f4f9}
   .btn-sub-action.danger{color:#b42318}.btn-sub-action.danger-confirm{background:#b42318;border-color:#b42318;color:#fff}
@@ -136,7 +134,7 @@
     <select id="locSelect" aria-label="Navegação"><option value="all">Tudo</option><option value="root">Sem pasta</option><option value="expiring">Com validade</option></select>
     <div class="title-row">
       <div class="breadcrumb" id="breadcrumb"></div><h1 class="title-h1" id="viewTitle">Tudo</h1><span class="title-count" id="titleCount">0 arquivos</span>
-      <div class="folder-actions" id="folderActions"><button class="btn-sub" id="btnDownloadFolder" type="button" hidden>Baixar .zip</button><button class="btn-sub danger" id="btnDeleteFolder" type="button" hidden>Excluir pasta</button></div>
+      <div class="folder-actions"><button class="btn-sub" id="btnDownloadFolder" type="button" hidden>Baixar .zip</button><button class="btn-sub danger" id="btnDeleteFolder" type="button" hidden>Excluir pasta</button></div>
       <div class="spacer"></div>
       <div class="chip-row" id="chipRow">
         <button class="chip active" data-kind="all" type="button">Todos</button>
@@ -145,7 +143,6 @@
         <button class="chip" data-kind="video" type="button">Vídeos</button>
         <button class="chip" data-kind="archive" type="button">Outros</button>
       </div>
-      <select id="sortSelect" style="display:none"></select>
     </div>
     <div class="bulk-bar" id="bulkBar">
       <span id="bulkCount">0 selecionado(s)</span>
@@ -201,15 +198,11 @@
   const bulkCopyBtn = document.getElementById('bulkCopyBtn');
 
   let loc = 'all';
-  let currentFolderName = '';
   let displayedFolders = [];
   let displayedFiles = [];
-  let currentSummary = { total: 0, total_size_bytes: 0, expiring_soon_count: 0 };
+  let currentSummary = 0;
   let currentPage = 1;
   let totalPages = 1;
-  let totalFiles = 0;
-  let lastRootTotalFiles = 0;
-  let lastRootSizeBytes = 0;
   let currentKind = 'all';
   let currentQuery = '';
   let selectedIds = new Set();
@@ -221,7 +214,38 @@
   let loadFoldersRequestId = 0;
 
   function isFolder(val) { return val && val !== 'all' && val !== 'root' && val !== 'expiring'; }
+  function folderName() { const f = displayedFolders.find(fo => fo.id === loc); return f ? f.name : 'Pasta'; }
+  function folderOptions(selectedId) { return displayedFolders.map(f => `<option value="${esc(f.id)}"${f.id === selectedId ? ' selected' : ''}>${esc(f.name)}</option>`).join(''); }
+  function deleteBtn(id) { return confirmingId === id ? `<button class="btn-sub-action danger-confirm" data-action="delete" data-id="${esc(id)}" type="button">Excluir?</button>` : `<button class="btn-sub-action danger" data-action="delete" data-id="${esc(id)}" type="button">Excluir</button>`; }
+  function refresh() { return Promise.all([loadFiles(), loadFolders()]); }
   function logError(msg, err, id) { const o = { svc: 'tmpup-web', msg, err: String(err) }; if(id != null) o.id = id; console.error(JSON.stringify(o)); }
+  async function copyText(text) {
+    try {
+      if(navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch(err) {}
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      return true;
+    } catch(e) {
+      logError('copy_failed', e);
+      return false;
+    }
+  }
+  async function copyLink(url, btn) {
+    if(await copyText(url)) {
+      btn.classList.add('copied');
+      showToast('Link copiado!');
+      setTimeout(() => btn.classList.remove('copied'), 2000);
+    }
+  }
 
   dropzone.addEventListener('click', ev => { if(!ev.target.closest('select, label, option')) fileInput.click(); });
   ['dragenter','dragover'].forEach(e => dropzone.addEventListener(e, ev => { ev.preventDefault(); dropzone.classList.add('dragover'); }));
@@ -241,7 +265,6 @@
   });
 
   async function uploadFiles(files) {
-    if(!files || !files.length) return;
     const ttl = ttlSelect.value;
     const targetFolder = destSelect.value || null;
     let uploaded = 0;
@@ -249,8 +272,7 @@
       await uploadOne(file, ttl, files.length, ++uploaded, targetFolder);
     }
     fileInput.value = '';
-    await loadFiles();
-    await loadFolders();
+    await refresh();
   }
 
   function uploadRequest(method, url, body, headers, onProgress) {
@@ -315,7 +337,7 @@
   }
 
   async function uploadOne(file, ttl, total, idx, folderId) {
-    const targetFolder = folderId !== undefined ? folderId : (destSelect.value || null);
+    const targetFolder = folderId || null;
     progressWrap.classList.add('active');
     progressText.style.display = 'block';
     progressBar.style.width = '0%';
@@ -366,27 +388,13 @@
       }
       const res = await fetch(`/api/files?${query}`);
       if(requestId !== loadFilesRequestId) return;
-      if(!res.ok) {
-        logError('load_files_failed', res.statusText);
-        fileList.innerHTML = '<div class="empty-state">Erro ao carregar arquivos</div>';
-        return;
-      }
+      if(!res.ok) throw new Error(res.statusText);
       const data = await res.json();
       if(requestId !== loadFilesRequestId) return;
-      if(!data || !Array.isArray(data.items)) {
-        logError('load_files_failed', 'invalid_data');
-        fileList.innerHTML = '<div class="empty-state">Erro ao carregar arquivos</div>';
-        return;
-      }
+      if(!data || !Array.isArray(data.items)) throw new Error('invalid_data');
       totalPages = data.total_pages || 0;
-      totalFiles = data.total_files !== undefined ? data.total_files : (data.total || 0);
-      if(!currentQuery && currentKind === 'all' && (loc === 'root' || loc === 'all')) {
-        lastRootTotalFiles = totalFiles;
-        lastRootSizeBytes = data.total_size_bytes || 0;
-        updateSidebarCounts();
-      }
+      currentSummary = data.total || 0;
       displayedFiles = append ? displayedFiles.concat(data.items) : data.items;
-      currentSummary = { total: data.total || 0, total_size_bytes: data.total_size_bytes || 0, expiring_soon_count: data.expiring_soon_count || 0 };
       render();
     } catch(e) {
       if(requestId !== loadFilesRequestId) return;
@@ -405,38 +413,26 @@
       if(requestId !== loadFoldersRequestId) return;
       displayedFolders = Array.isArray(data.items) ? data.items : [];
       displayedFolders.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
-      renderFolders();
-      updateDestSelect();
-      updateSidebarCounts();
-      updateLocSelect();
-      // Folder rows are part of the timeline, so the list depends on this response too.
-      renderFiles();
+      renderFolderWidgets(data.root);
     } catch(e) {
       if(requestId !== loadFoldersRequestId) return;
       logError('load_folders_failed', e);
     }
   }
 
-  function updateSidebarCounts() {
-    if(countRoot) countRoot.textContent = lastRootTotalFiles;
+  function renderFolderWidgets(root) {
+    const r = root || {};
+    const rootCount = r.file_count || 0;
     const foldersSum = displayedFolders.reduce((sum, f) => sum + (f.file_count || 0), 0);
-    if(countAll) countAll.textContent = lastRootTotalFiles + foldersSum;
-    // Header summary covers everything: loose files plus every folder.
-    const sizeSum = displayedFolders.reduce((sum, f) => sum + (f.total_size_bytes || 0), lastRootSizeBytes);
-    summaryBar.textContent = `${lastRootTotalFiles + foldersSum} arquivos · ${formatSize(sizeSum)}`;
-  }
-
-  function updateDestSelect() {
-    const currentVal = destSelect.value;
-    destSelect.innerHTML = '<option value="">Sem pasta</option>' +
-      displayedFolders.map(f => `<option value="${esc(f.id)}">${esc(f.name)}</option>`).join('');
-    if(isFolder(loc)) {
-      destSelect.value = loc;
-    } else if(currentVal && displayedFolders.some(f => f.id === currentVal)) {
-      destSelect.value = currentVal;
-    } else {
-      destSelect.value = '';
-    }
+    const sizeSum = displayedFolders.reduce((sum, f) => sum + (f.total_size_bytes || 0), r.total_size_bytes || 0);
+    countRoot.textContent = rootCount;
+    countAll.textContent = rootCount + foldersSum;
+    summaryBar.textContent = `${rootCount + foldersSum} arquivos · ${formatSize(sizeSum)}`;
+    renderFolders();
+    destSelect.innerHTML = '<option value="">Sem pasta</option>' + folderOptions(isFolder(loc) ? loc : destSelect.value);
+    locSelect.innerHTML = '<option value="all">Tudo</option><option value="root">Sem pasta</option><option value="expiring">Com validade</option>' + folderOptions(loc);
+    locSelect.value = (!currentQuery && (loc === 'all' || loc === 'root' || loc === 'expiring' || displayedFolders.some(f => f.id === loc))) ? loc : '';
+    renderFiles();
   }
 
   function updateSidebarNav() {
@@ -446,12 +442,6 @@
     sidebar.querySelectorAll('.folder-item').forEach(btn => {
       btn.classList.toggle('active', !currentQuery && btn.dataset.id === loc);
     });
-    updateLocSelect();
-  }
-
-  function updateLocSelect() {
-    locSelect.innerHTML = '<option value="all">Tudo</option><option value="root">Sem pasta</option><option value="expiring">Com validade</option>' +
-      displayedFolders.map(f => `<option value="${esc(f.id)}">${esc(f.name)}</option>`).join('');
     locSelect.value = (!currentQuery && (loc === 'all' || loc === 'root' || loc === 'expiring' || displayedFolders.some(f => f.id === loc))) ? loc : '';
   }
 
@@ -463,7 +453,7 @@
       return;
     }
     folderList.innerHTML = filtered.map(f => `
-      <button class="folder-item ${(!currentQuery && loc === f.id) ? 'active' : ''}" data-action="open-folder" data-id="${esc(f.id)}" data-name="${esc(f.name)}" title="${esc(f.name)}" type="button">
+      <button class="folder-item ${(!currentQuery && loc === f.id) ? 'active' : ''}" data-action="open-folder" data-id="${esc(f.id)}" title="${esc(f.name)}" type="button">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#c98a1b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         <span class="folder-name">${esc(f.name)}</span>
         <span class="folder-count">${f.file_count || 0}</span>
@@ -476,15 +466,10 @@
   }
 
   function render() {
-    renderSummary();
     renderTitleRow();
-    renderFiles(displayedFiles);
+    renderFiles();
     renderLoadMore();
     renderBulkBar();
-  }
-
-  function renderSummary() {
-    updateSidebarCounts();
   }
 
   function renderTitleRow() {
@@ -497,9 +482,9 @@
     } else if(loc === 'expiring') {
       viewTitle.textContent = 'Com validade';
     } else {
-      viewTitle.textContent = currentFolderName || 'Pasta';
+      viewTitle.textContent = folderName();
     }
-    titleCount.textContent = `${currentSummary.total} ${currentSummary.total === 1 ? 'item' : 'itens'}`;
+    titleCount.textContent = `${currentSummary} ${currentSummary === 1 ? 'item' : 'itens'}`;
     const inFolder = isFolder(loc);
     if(inFolder) {
       breadcrumb.innerHTML = '<button type="button" data-nav="all">Tudo</button> &nbsp;/&nbsp;';
@@ -527,37 +512,27 @@
         return `<div class="day-header"><div class="day-title">${esc(row.label)}</div><div class="day-sub">${esc(row.summary)}</div></div>`;
       }
       if(row.type === 'folder') {
-        const fo = row.folder || row, cnt = fo.file_count === 1 ? '1 arquivo' : `${fo.file_count || 0} arquivos`;
-        return `<div class="list-row folder-row"><span class="cell-check"></span><span class="cell-time">${formatTime(fo.updated_at || 0, row.insideDay)}</span><span class="cell-type"><svg width="20" height="20" viewBox="0 0 24 24" fill="#c98a1b"><path d="M2 7a3 3 0 0 1 3-3h4.2a2 2 0 0 1 1.5.7L12 6h7a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3z"/></svg></span><div class="cell-name"><button class="folder-name-btn" data-action="open-folder" data-id="${esc(fo.id)}" data-name="${esc(fo.name)}" type="button">${esc(fo.name)}</button><span class="folder-chip">${cnt}</span></div><span class="cell-size">${formatSize(fo.total_size_bytes || 0)}</span><span class="cell-exp"></span><span class="cell-views"></span><span class="cell-actions"><button class="btn-sub-action" data-action="open-folder" data-id="${esc(fo.id)}" data-name="${esc(fo.name)}" type="button">Abrir</button><a class="btn-sub-action" href="/api/folders/${esc(fo.id)}/download">.zip</a></span></div>`;
+        const cnt = row.file_count === 1 ? '1 arquivo' : `${row.file_count || 0} arquivos`;
+        return `<div class="list-row folder-row"><span class="cell-check"></span><span class="cell-time">${formatTime(row.updated_at || 0, row.insideDay)}</span><span class="cell-type"><svg width="20" height="20" viewBox="0 0 24 24" fill="#c98a1b"><path d="M2 7a3 3 0 0 1 3-3h4.2a2 2 0 0 1 1.5.7L12 6h7a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3z"/></svg></span><div class="cell-name"><button class="folder-name-btn" data-action="open-folder" data-id="${esc(row.id)}" type="button">${esc(row.name)}</button><span class="folder-chip">${cnt}</span></div><span class="cell-size">${formatSize(row.total_size_bytes || 0)}</span><span class="cell-exp"></span><span class="cell-views"></span><span class="cell-actions"><button class="btn-sub-action" data-action="open-folder" data-id="${esc(row.id)}" type="button">Abrir</button><a class="btn-sub-action" href="/api/folders/${esc(row.id)}/download">.zip</a></span></div>`;
       }
-      const f = row.file || row;
-      const targetUrl = (f.view_url && isPreviewable(f.filename)) ? f.view_url : f.url;
-      const thumbOrBadge = f.is_image
-        ? `<img class="file-thumb" src="${esc(f.url.replace('/d/', '/t/'))}" alt="" loading="lazy">`
-        : `<span class="type-badge badge-${deriveKind(f.filename, f.is_image)}">${esc((f.filename.split('.').pop() || '').toUpperCase().slice(0, 4))}</span>`;
-      const hasVersions = Array.isArray(f.versions) && f.versions.length > 0;
-      const verChip = hasVersions ? `<button class="ver-chip" data-action="toggle-ver" data-id="${esc(f.id)}" type="button">${f.versions.length + 1} versões</button>` : '';
+      const targetUrl = (row.view_url && isPreviewable(row.filename)) ? row.view_url : row.url;
+      const thumbOrBadge = row.is_image
+        ? `<img class="file-thumb" src="${esc(row.url.replace('/d/', '/t/'))}" alt="" loading="lazy">`
+        : `<span class="type-badge badge-${deriveKind(row.filename, row.is_image)}">${esc((row.filename.split('.').pop() || '').toUpperCase().slice(0, 4))}</span>`;
+      const hasVersions = Array.isArray(row.versions) && row.versions.length > 0;
+      const verChip = hasVersions ? `<button class="ver-chip" data-action="toggle-ver" data-id="${esc(row.id)}" type="button">${row.versions.length + 1} versões</button>` : '';
       const folderChipHtml = row.folderChip ? `<span class="folder-chip" title="${esc(row.folderChip)}">${esc(row.folderChip)}</span>` : '';
-      const remaining = formatCountdown(f.expires_in), soon = f.expires_in > 0 && f.expires_in < 3600;
-      const viewsStr = f.views ? `${f.views}×` : '—';
-      const viewsTitle = `${f.downloads || 0} download(s) · última visualização: ${formatLast(f.last_viewed_at)}`;
+      const remaining = formatCountdown(row.expires_in), soon = row.expires_in > 0 && row.expires_in < 3600;
+      const viewsStr = row.views ? `${row.views}×` : '—';
+      const viewsTitle = `${row.downloads || 0} download(s) · última visualização: ${formatLast(row.last_viewed_at)}`;
       let panelRow = '';
-      if(openPanelId === f.id) {
-        const isConfirming = confirmingId === f.id;
-        const delBtn = isConfirming
-          ? `<button class="btn-sub-action danger-confirm" data-action="delete" data-id="${esc(f.id)}" type="button">Excluir?</button>`
-          : `<button class="btn-sub-action danger" data-action="delete" data-id="${esc(f.id)}" type="button">Excluir</button>`;
-        const folderOpts = displayedFolders.map(fo => `<option value="${esc(fo.id)}" ${f.folder_id === fo.id ? 'selected' : ''}>${esc(fo.name)}</option>`).join('');
-        panelRow = `<div class="more-panel" data-panel-id="${esc(f.id)}"><a class="btn-sub-action" href="${esc(f.url)}" download="${esc(f.filename)}">Baixar</a><label style="display:inline-flex;align-items:center;gap:4px">Mover para <select class="panel-select" data-action="move-file" data-id="${esc(f.id)}"><option value="" ${!f.folder_id ? 'selected' : ''}>Sem pasta</option>${folderOpts}</select></label><span style="color:#5c6470">Validade:</span><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="3600" type="button">1 hora</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="86400" type="button">24 horas</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="604800" type="button">7 dias</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="0" type="button">Nunca expira</button>${delBtn}</div>`;
+      if(openPanelId === row.id) {
+        panelRow = `<div class="more-panel" data-panel-id="${esc(row.id)}"><a class="btn-sub-action" href="${esc(row.url)}" download="${esc(row.filename)}">Baixar</a><label style="display:inline-flex;align-items:center;gap:4px">Mover para <select class="panel-select" data-action="move-file" data-id="${esc(row.id)}"><option value="" ${!row.folder_id ? 'selected' : ''}>Sem pasta</option>${folderOptions(row.folder_id)}</select></label><span style="color:#5c6470">Validade:</span><button class="renew-chip" data-action="renew-apply" data-id="${esc(row.id)}" data-ttl="3600" type="button">1 hora</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(row.id)}" data-ttl="86400" type="button">24 horas</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(row.id)}" data-ttl="604800" type="button">7 dias</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(row.id)}" data-ttl="0" type="button">Nunca expira</button>${deleteBtn(row.id)}</div>`;
       }
-      let html = `<div class="list-row"><span class="cell-check"><input class="select-box" type="checkbox" data-action="select" data-id="${esc(f.id)}" ${selectedIds.has(f.id) ? 'checked' : ''} aria-label="Selecionar arquivo"></span><span class="cell-time">${formatTime(f.created_at || 0, row.insideDay)}</span><span class="cell-type">${thumbOrBadge}</span><div class="cell-name"><a class="row-name" href="${esc(targetUrl)}" target="_blank" rel="noopener" title="${esc(f.filename)}">${esc(f.filename)}</a>${verChip}${folderChipHtml}</div><span class="cell-size">${formatSize(f.size_bytes || 0)}</span><span class="cell-exp ${soon ? 'soon' : ''}" data-action="renew-toggle" data-id="${esc(f.id)}" style="cursor:pointer" title="Renovar validade">${remaining}</span><span class="cell-views" title="${esc(viewsTitle)}">${viewsStr}</span><span class="cell-actions"><button class="btn-copy-link" data-action="copy" data-url="${esc(f.url)}" type="button">Copiar link</button><button class="btn-sub-action btn-more" data-action="toggle-more" data-id="${esc(f.id)}" aria-label="Mais ações" type="button"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button></span></div>${panelRow}`;
-      if(hasVersions && openVersions.has(f.id)) {
-        for(const v of f.versions) {
-          const isConfirming = confirmingId === v.id;
-          const delBtn = isConfirming
-            ? `<button class="btn-sub-action danger-confirm" data-action="delete" data-id="${esc(v.id)}" type="button">Excluir?</button>`
-            : `<button class="btn-sub-action danger" data-action="delete" data-id="${esc(v.id)}" type="button">Excluir</button>`;
-          html += `<div class="list-row version-row"><span class="cell-check"></span><span class="cell-time">${formatTime(v.created_at || 0, row.insideDay)}</span><span class="cell-type"></span><div class="cell-name">versão anterior de ${esc(f.filename)}</div><span class="cell-size">${formatSize(v.size_bytes || 0)}</span><span class="cell-exp"></span><span class="cell-views"></span><span class="cell-actions"><button class="btn-sub-action" data-action="copy" data-url="${esc(v.url)}" type="button">Copiar link</button>${delBtn}</span></div>`;
+      let html = `<div class="list-row"><span class="cell-check"><input class="select-box" type="checkbox" data-action="select" data-id="${esc(row.id)}" ${selectedIds.has(row.id) ? 'checked' : ''} aria-label="Selecionar arquivo"></span><span class="cell-time">${formatTime(row.created_at || 0, row.insideDay)}</span><span class="cell-type">${thumbOrBadge}</span><div class="cell-name"><a class="row-name" href="${esc(targetUrl)}" target="_blank" rel="noopener" title="${esc(row.filename)}">${esc(row.filename)}</a>${verChip}${folderChipHtml}</div><span class="cell-size">${formatSize(row.size_bytes || 0)}</span><span class="cell-exp ${soon ? 'soon' : ''}" data-action="renew-toggle" data-id="${esc(row.id)}" style="cursor:pointer" title="Renovar validade">${remaining}</span><span class="cell-views" title="${esc(viewsTitle)}">${viewsStr}</span><span class="cell-actions"><button class="btn-copy-link" data-action="copy" data-url="${esc(row.url)}" type="button">Copiar link</button><button class="btn-sub-action" data-action="toggle-more" data-id="${esc(row.id)}" aria-label="Mais ações" type="button"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button></span></div>${panelRow}`;
+      if(hasVersions && openVersions.has(row.id)) {
+        for(const v of row.versions) {
+          html += `<div class="list-row version-row"><span class="cell-check"></span><span class="cell-time">${formatTime(v.created_at || 0, row.insideDay)}</span><span class="cell-type"></span><div class="cell-name">versão anterior de ${esc(row.filename)}</div><span class="cell-size">${formatSize(v.size_bytes || 0)}</span><span class="cell-exp"></span><span class="cell-views"></span><span class="cell-actions"><button class="btn-sub-action" data-action="copy" data-url="${esc(v.url)}" type="button">Copiar link</button>${deleteBtn(v.id)}</span></div>`;
         }
       }
       return html;
@@ -565,8 +540,7 @@
   }
 
   function updateBulkMoveSelect() {
-    bulkMoveSelect.innerHTML = '<option value="" disabled selected>Mover para pasta</option><option value="root">Sem pasta</option>' +
-      displayedFolders.map(f => `<option value="${esc(f.id)}">${esc(f.name)}</option>`).join('');
+    bulkMoveSelect.innerHTML = '<option value="" disabled selected>Mover para pasta</option><option value="root">Sem pasta</option>' + folderOptions();
     bulkMoveSelect.value = '';
   }
 
@@ -590,7 +564,6 @@
     if(action === 'copy') { copyLink(btn.dataset.url, btn); return; }
 
     if(action === 'open-folder') {
-      currentFolderName = btn.dataset.name || '';
       navigate(id);
       return;
     }
@@ -633,8 +606,7 @@
             showToast('Arquivo removido');
             selectedIds.delete(id);
             if(openPanelId === id) openPanelId = null;
-            await loadFiles();
-            await loadFolders();
+            await refresh();
           } else {
             logError('delete_file_failed', res.statusText, id);
             showToast('Erro ao excluir');
@@ -664,8 +636,7 @@
         });
         if(res.ok) {
           showToast('Arquivo movido');
-          await loadFiles();
-          await loadFolders();
+          await refresh();
         } else {
           logError('move_file_failed', res.statusText, id);
           showToast('Erro ao mover');
@@ -687,7 +658,6 @@
     loc = newLoc;
     searchInput.value = '';
     currentQuery = '';
-    currentPage = 1;
     selectedIds.clear();
     destSelect.value = isFolder(loc) ? loc : '';
     updateSidebarNav();
@@ -698,11 +668,7 @@
     const placeBtn = ev.target.closest('[data-place]');
     if(placeBtn) { navigate(placeBtn.dataset.place); return; }
     const folderBtn = ev.target.closest('[data-action="open-folder"]');
-    if(folderBtn) {
-      currentFolderName = folderBtn.dataset.name || '';
-      navigate(folderBtn.dataset.id);
-      return;
-    }
+    if(folderBtn) { navigate(folderBtn.dataset.id); return; }
   });
 
   breadcrumb.addEventListener('click', ev => {
@@ -730,7 +696,6 @@
       }
       showToast('Pasta criada');
       await loadFolders();
-      await loadFiles();
     } catch(e) {
       logError('create_folder_failed', e);
       showToast('Erro ao criar pasta');
@@ -739,13 +704,13 @@
 
   btnDownloadFolder.addEventListener('click', () => {
     if(!isFolder(loc)) return;
-    if(totalFiles === 0) { showToast('Pasta vazia'); return; }
+    if(currentSummary === 0) { showToast('Pasta vazia'); return; }
     window.location.href = `/api/folders/${loc}/download`;
   });
 
   btnDeleteFolder.addEventListener('click', async () => {
     if(!isFolder(loc)) return;
-    if(!window.confirm(`Apagar a pasta "${currentFolderName}" e todos os arquivos de dentro?`)) return;
+    if(!window.confirm(`Apagar a pasta "${folderName()}" e todos os arquivos de dentro?`)) return;
     try {
       const res = await fetch(`/api/folders/${loc}`, { method: 'DELETE' });
       if(!res.ok) {
@@ -773,7 +738,6 @@
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = setTimeout(() => {
       currentQuery = searchInput.value.trim();
-      currentPage = 1;
       selectedIds.clear();
       updateSidebarNav();
       loadFiles();
@@ -792,46 +756,49 @@
     if(!chip) return;
     currentKind = chip.dataset.kind;
     chipRow.querySelectorAll('.chip').forEach(c => c.classList.toggle('active', c === chip));
-    currentPage = 1;
     selectedIds.clear();
     renderBulkBar();
     loadFiles();
   });
 
   // --- Bulk actions ---
-  locSelect.addEventListener('change', () => { if(locSelect.value) navigate(locSelect.value); });
-  document.getElementById('bulkCancelBtn').addEventListener('click', () => { selectedIds.clear(); render(); });
-  bulkMoveSelect.addEventListener('change', async () => {
-    const target = bulkMoveSelect.value;
-    if(!target) return;
-    const targetFolder = target === 'root' ? null : target;
+  async function runBulk(event, request) {
     const ids = Array.from(selectedIds);
     if(!ids.length) return;
-    const responses = await Promise.all(ids.map(id => fetch(`/api/files/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder_id: targetFolder })
-    }).catch(err => { logError('bulk_move_failed', err, id); return null; })));
+    const responses = await Promise.all(ids.map(id => request(id).catch(err => { logError(event, err, id); return null; })));
     let successCount = 0;
     responses.forEach((res, i) => {
       if(res && res.ok) {
         successCount++;
         selectedIds.delete(ids[i]);
       } else if(res) {
-        logError('bulk_move_failed', res.statusText, ids[i]);
+        logError(event, res.statusText, ids[i]);
       }
     });
-    if(successCount === ids.length) {
-      showToast(`${ids.length} arquivo(s) movidos`);
-    } else {
-      showToast(`${successCount} de ${ids.length} movidos`);
-    }
-    bulkMoveSelect.value = '';
+    const msg = event === 'bulk_delete_failed'
+      ? (successCount === ids.length ? `${ids.length} arquivo(s) excluidos` : `${successCount} de ${ids.length} arquivo(s) excluidos`)
+      : (event === 'bulk_renew_failed'
+        ? (successCount === ids.length ? `${ids.length} arquivo(s) renovados` : `${successCount} de ${ids.length} arquivo(s) renovados`)
+        : (successCount === ids.length ? `${ids.length} arquivo(s) movidos` : `${successCount} de ${ids.length} movidos`));
+    showToast(msg);
     renderBulkBar();
-    await loadFiles();
-    await loadFolders();
+    await refresh();
+  }
+
+  locSelect.addEventListener('change', () => { if(locSelect.value) navigate(locSelect.value); });
+  document.getElementById('bulkCancelBtn').addEventListener('click', () => { selectedIds.clear(); render(); });
+  bulkMoveSelect.addEventListener('change', async () => {
+    const target = bulkMoveSelect.value;
+    if(!target) return;
+    const folder_id = target === 'root' ? null : target;
+    bulkMoveSelect.value = '';
+    await runBulk('bulk_move_failed', id => fetch(`/api/files/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_id })
+    }));
   });
-  bulkCopyBtn.addEventListener('click', () => {
+  bulkCopyBtn.addEventListener('click', async () => {
     const ids = Array.from(selectedIds);
     if(!ids.length) return;
     const urls = ids.map(id => {
@@ -841,62 +808,18 @@
     }).filter(Boolean);
     const text = urls.join('\n');
     if(!text) return;
-    navigator.clipboard.writeText(text).then(() => showToast('Links copiados')).catch(err => {
-      try {
-        const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
-        ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-        showToast('Links copiados');
-      } catch(e) {
-        logError('copy_failed', err || e);
-        showToast('Erro ao copiar links');
-      }
-    });
+    if(await copyText(text)) showToast('Links copiados');
+    else showToast('Erro ao copiar links');
   });
   document.getElementById('bulkDeleteBtn').addEventListener('click', async () => {
     const ids = Array.from(selectedIds);
-    if(!ids.length) return;
-    if(!window.confirm(`Excluir ${ids.length} arquivo(s) selecionado(s)?`)) return;
-    const responses = await Promise.all(ids.map(id => fetch(`/api/files/${id}`, { method: 'DELETE' }).catch(err => { logError('bulk_delete_failed', err, id); return null; })));
-    let successCount = 0;
-    responses.forEach((res, i) => {
-      if(res && res.ok) {
-        successCount++;
-        selectedIds.delete(ids[i]);
-      } else if(res) {
-        logError('bulk_delete_failed', res.statusText, ids[i]);
-      }
-    });
-    if(successCount === ids.length) {
-      showToast(`${ids.length} arquivo(s) excluidos`);
-    } else {
-      showToast(`${successCount} de ${ids.length} arquivo(s) excluidos`);
-    }
-    renderBulkBar();
-    await loadFiles();
-    await loadFolders();
+    if(!ids.length || !window.confirm(`Excluir ${ids.length} arquivo(s) selecionado(s)?`)) return;
+    await runBulk('bulk_delete_failed', id => fetch(`/api/files/${id}`, { method: 'DELETE' }));
   });
   document.getElementById('bulkRenewBtn').addEventListener('click', async () => {
-    const ids = Array.from(selectedIds);
-    if(!ids.length) return;
-    const responses = await Promise.all(ids.map(id => fetch(`/api/files/${id}/ttl`, {
+    await runBulk('bulk_renew_failed', id => fetch(`/api/files/${id}/ttl`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttl: 0 })
-    }).catch(err => { logError('bulk_renew_failed', err, id); return null; })));
-    let successCount = 0;
-    responses.forEach((res, i) => {
-      if(res && res.ok) {
-        successCount++;
-        selectedIds.delete(ids[i]);
-      } else if(res) {
-        logError('bulk_renew_failed', res.statusText, ids[i]);
-      }
-    });
-    if(successCount === ids.length) {
-      showToast(`${ids.length} arquivo(s) renovados`);
-    } else {
-      showToast(`${successCount} de ${ids.length} arquivo(s) renovados`);
-    }
-    renderBulkBar();
-    await loadFiles();
+    }));
   });
 
   function formatTime(epochSec, insideDay) {
@@ -942,9 +865,9 @@
     const fileList = files || [], folderList = folders || [], q = (query || '').trim().toLowerCase();
     if(q) {
       const match = (!kind || kind === 'all') ? folderList.filter(fo => (fo.name || '').toLowerCase().includes(q)) : [];
-      return [...match.map(fo => ({ type: 'folder', ...fo, folder: fo, insideDay: false })), ...fileList.map(f => ({ type: 'file', ...f, file: f, folderChip: resolveFolderChip(f, folderList, view, q), insideDay: false }))];
+      return [...match.map(fo => ({ type: 'folder', ...fo, insideDay: false })), ...fileList.map(f => ({ type: 'file', ...f, folderChip: resolveFolderChip(f, folderList, view, q), insideDay: false }))];
     }
-    if(view && view !== 'all' && view !== 'root') return fileList.map(f => ({ type: 'file', ...f, file: f, folderChip: resolveFolderChip(f, folderList, view, q), insideDay: false }));
+    if(view && view !== 'all' && view !== 'root') return fileList.map(f => ({ type: 'file', ...f, folderChip: resolveFolderChip(f, folderList, view, q), insideDay: false }));
     let eligible = [];
     if((view === 'all' || !view) && (!kind || kind === 'all')) {
       const oldest = fileList.length > 0 ? Math.min(...fileList.map(f => f.created_at)) : null;
@@ -952,7 +875,7 @@
     }
     const entries = [...eligible.map(fo => ({ type: 'folder', time: fo.updated_at || 0, data: fo })), ...fileList.map(f => ({ type: 'file', time: f.created_at || 0, data: f }))];
     entries.sort((a, b) => (b.time - a.time) || (a.type === 'folder' ? -1 : 1));
-    const nowDate = now instanceof Date ? now : (typeof now === 'number' ? (now > 1e11 ? new Date(now) : new Date(now * 1000)) : new Date());
+    const nowDate = now || new Date();
     const nowYear = nowDate.getFullYear(), yest = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate() - 1);
     const MONTHS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
     const sameDay = (d1, d2) => d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
@@ -972,11 +895,10 @@
       const fos = g.entries.filter(e => e.type === 'folder'), fis = g.entries.filter(e => e.type === 'file'), parts = [];
       if(fos.length) parts.push(fos.length === 1 ? '1 pasta' : `${fos.length} pastas`);
       if(fis.length) parts.push(fis.length === 1 ? '1 arquivo solto' : `${fis.length} arquivos soltos`);
-      const summary = parts.join(' · ');
-      rows.push({ type: 'day', label: dayLabel(g.date), summary, sub: summary });
+      rows.push({ type: 'day', label: dayLabel(g.date), summary: parts.join(' · ') });
       for(const entry of g.entries) {
         const extra = entry.type === 'file' ? { folderChip: resolveFolderChip(entry.data, folderList, view, q) } : {};
-        rows.push({ type: entry.type, ...entry.data, [entry.type]: entry.data, ...extra, insideDay: true });
+        rows.push({ type: entry.type, ...entry.data, ...extra, insideDay: true });
       }
     }
     return rows;
@@ -1002,33 +924,16 @@
 
   function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
-  function copyLink(url, btn) {
-    navigator.clipboard.writeText(url).then(() => {
-      btn.classList.add('copied'); showToast('Link copiado!');
-      setTimeout(() => btn.classList.remove('copied'), 2000);
-    }).catch(err => {
-      try {
-        const ta = document.createElement('textarea'); ta.value = url; document.body.appendChild(ta);
-        ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-        btn.classList.add('copied'); showToast('Link copiado!');
-        setTimeout(() => btn.classList.remove('copied'), 2000);
-      } catch(e) {
-        logError('copy_failed', err || e);
-      }
-    });
-  }
-
   function showToast(msg) { toast.textContent = msg; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2000); }
 
   setInterval(() => {
+    if(document.hidden) return;
     if(currentPage === 1 && selectedIds.size === 0 && !confirmingId && !openPanelId && openVersions.size === 0) {
-      loadFiles();
-      loadFolders();
+      refresh();
     }
   }, 30000);
   fetch('/api/me').then(r=>r.json()).then(d=>{ if(d.email) document.getElementById('userEmail').textContent = d.email; }).catch(e => logError('me_failed', e));
-  loadFiles();
-  loadFolders();
+  refresh();
 })();
 </script>
 </body>

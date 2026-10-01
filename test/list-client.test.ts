@@ -173,4 +173,40 @@ describe("list client pure helpers (buildRows)", () => {
       expect(resolveFolderChip({ folder_id: "d1" }, [], "expiring", "")).toBeNull();
     });
   });
+
+  describe("row descriptors shape", () => {
+    it("returns clean row descriptors without sub, folder, file, or [type] duplicates", () => {
+      const { buildRows } = loadPureHelpers();
+      const files = [{ id: "f1", filename: "test.txt", created_at: 10000, folder_id: "d1" }];
+      const folders = [{ id: "d1", name: "pasta", updated_at: 10000 }];
+      const rows = buildRows({ files, folders, view: "all", kind: "all", query: "", allLoaded: true, now });
+      const day = rows.find((r: any) => r.type === "day");
+      const folder = rows.find((r: any) => r.type === "folder");
+      const file = rows.find((r: any) => r.type === "file");
+
+      expect(day).toBeDefined();
+      expect("sub" in day).toBe(false);
+
+      expect(folder).toBeDefined();
+      expect("folder" in folder).toBe(false);
+
+      expect(file).toBeDefined();
+      expect("file" in file).toBe(false);
+    });
+
+    it("returns clean row descriptors in search view without folder or file duplicates", () => {
+      const { buildRows } = loadPureHelpers();
+      const files = [{ id: "f1", filename: "searchme.txt", created_at: 10000 }];
+      const folders = [{ id: "d1", name: "searchme-dir", updated_at: 10000 }];
+      const rows = buildRows({ files, folders, view: "all", kind: "all", query: "searchme", allLoaded: true, now });
+      const folder = rows.find((r: any) => r.type === "folder");
+      const file = rows.find((r: any) => r.type === "file");
+
+      expect(folder).toBeDefined();
+      expect("folder" in folder).toBe(false);
+
+      expect(file).toBeDefined();
+      expect("file" in file).toBe(false);
+    });
+  });
 });

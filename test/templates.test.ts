@@ -199,4 +199,26 @@ describe("frontend template contracts (painel de trabalho)", () => {
   it("pins the absence of emoji entities (&#1...)", () => {
     expect(HTML_TEMPLATE).not.toContain("&#1");
   });
+
+  it("removes dead code and derives folderName/summary without caches", () => {
+    expect(HTML_TEMPLATE).not.toContain('id="sortSelect"');
+    expect(HTML_TEMPLATE).not.toContain(".renew-row");
+    expect(HTML_TEMPLATE).not.toContain(".badge-image");
+    expect(HTML_TEMPLATE).not.toContain('id="folderActions"');
+    expect(HTML_TEMPLATE).not.toContain("btn-more");
+    expect(HTML_TEMPLATE).not.toContain("renderSummary");
+    expect(HTML_TEMPLATE).not.toContain("currentFolderName");
+    expect(HTML_TEMPLATE).not.toContain("lastRootTotalFiles");
+    expect(HTML_TEMPLATE).not.toContain("lastRootSizeBytes");
+  });
+
+  it("contains unified helpers: folderOptions, copyText, runBulk, refresh, folderName, renderFolderWidgets", () => {
+    expect(HTML_TEMPLATE).toContain("function folderOptions(");
+    expect(HTML_TEMPLATE).toContain("function copyText(");
+    expect(HTML_TEMPLATE).toContain("function runBulk(");
+    expect(HTML_TEMPLATE).toContain("function refresh(");
+    expect(HTML_TEMPLATE).toContain("function folderName(");
+    expect(HTML_TEMPLATE).toContain("function renderFolderWidgets(");
+    expect(HTML_TEMPLATE).toContain("document.hidden");
+  });
 });
