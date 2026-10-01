@@ -16,6 +16,7 @@ import { registerFileRoutes } from "./routes/files.js";
 import { registerFolderRoutes } from "./routes/folders.js";
 import { registerPageRoutes } from "./routes/pages.js";
 import { registerTransferRoutes } from "./routes/transfer.js";
+import { registerUploadRoutes } from "./routes/uploads.js";
 
 export interface BuildServerOptions {
   /** Enable Fastify's request logging (off in tests). */
@@ -82,6 +83,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   await registerAuthRoutes(app);
   await registerFileRoutes(app);
   await registerFolderRoutes(app);
+  await registerUploadRoutes(app);
   await registerTransferRoutes(app);
   await registerPageRoutes(app);
   await registerMcpRoutes(app);

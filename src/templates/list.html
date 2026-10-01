@@ -336,6 +336,67 @@
     loadFiles();
   }
 
+  function uploadRequest(method, url, body, headers, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open(method, url);
+      xhr.timeout = 180000;
+      Object.entries(headers || {}).forEach(([name, value]) => xhr.setRequestHeader(name, value));
+      xhr.upload.addEventListener('progress', ev => {
+        if(ev.lengthComputable && onProgress) onProgress(ev.loaded);
+      });
+      xhr.addEventListener('load', () => {
+        let data;
+        try { data = JSON.parse(xhr.responseText); } catch(e) { data = {}; }
+        if(xhr.status >= 200 && xhr.status < 300) return resolve(data);
+        const message = xhr.status === 413 ? 'O servidor recusou o tamanho do envio.' :
+          (data.detail || data.error || `Falha no envio (HTTP ${xhr.status}).`);
+        const error = new Error(message);
+        error.retryable = xhr.status === 408 || xhr.status === 429 || xhr.status >= 500;
+        reject(error);
+      });
+      const networkError = message => { const error = new Error(message); error.retryable = true; reject(error); };
+      xhr.addEventListener('error', () => networkError('Conexão interrompida durante o envio.'));
+      xhr.addEventListener('timeout', () => networkError('O envio demorou demais. Verifique a conexão e tente novamente.'));
+      xhr.addEventListener('abort', () => reject(new Error('Envio cancelado.')));
+      xhr.send(body);
+    });
+  }
+
+  async function retryUpload(operation) {
+    for(let attempt = 0; ; attempt++) {
+      try { return await operation(); }
+      catch(error) {
+        if(!error.retryable || attempt >= 3) throw error;
+        await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+      }
+    }
+  }
+
+  async function uploadChunks(file, ttl, onProgress, folderId) {
+    const session = await uploadRequest('POST', '/api/uploads',
+      JSON.stringify({ filename: file.name, size: file.size, ttl: Number(ttl), folder_id: folderId || null }),
+      { 'Content-Type': 'application/json' });
+    const chunkSize = Math.min(session.chunk_size, 8 * 1024 * 1024);
+    if(!session.upload_id || !Number.isSafeInteger(chunkSize) || chunkSize <= 0) throw new Error('Resposta de upload inválida.');
+    const url = '/api/uploads/' + encodeURIComponent(session.upload_id);
+    try {
+      for(let offset = 0; offset < file.size;) {
+        const end = Math.min(offset + chunkSize, file.size);
+        const data = await retryUpload(() => uploadRequest('PUT', url + '?offset=' + offset,
+          file.slice(offset, end), { 'Content-Type': 'application/octet-stream' },
+          loaded => onProgress(Math.min(offset + loaded, file.size))));
+        if(data.offset !== end) throw new Error('O servidor não confirmou o bloco enviado.');
+        offset = end;
+        onProgress(offset);
+      }
+      return await retryUpload(() => uploadRequest('POST', url + '/complete', null));
+    } catch(error) {
+      try { await uploadRequest('DELETE', url, null); } catch(cleanupError) {}
+      throw error;
+    }
+  }
+
   async function uploadOne(file, ttl, total, idx) {
     progressWrap.classList.add('active');
     progressBar.style.width = '0%';
@@ -344,26 +405,17 @@
     statusEl.className = 'status';
     statusEl.textContent = '';
     try {
-      await new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', '/api/upload');
-        xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name));
-        xhr.setRequestHeader('X-TTL', ttl);
-        if(currentFolderId) xhr.setRequestHeader('X-Folder-Id', currentFolderId);
-        xhr.upload.addEventListener('progress', ev => {
-          if(ev.lengthComputable) {
-            const pct = Math.round((ev.loaded / ev.total) * 100);
-            progressBar.style.width = pct + '%';
-            progressText.textContent = `${prefix}Enviando ${file.name}... ${pct}%`;
-          }
-        });
-        xhr.addEventListener('load', () => {
-          if(xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
-          else { let msg = 'Upload failed'; try { msg = JSON.parse(xhr.responseText).detail || msg; } catch(e){} reject(new Error(msg)); }
-        });
-        xhr.addEventListener('error', () => reject(new Error('Erro de rede')));
-        xhr.send(file);
-      });
+      const onProgress = loaded => {
+        const pct = Math.min(99, Math.round((loaded / file.size) * 100));
+        progressBar.style.width = pct + '%';
+        progressText.textContent = `${prefix}Enviando ${file.name}... ${pct}%`;
+      };
+      if(file.size > 8 * 1024 * 1024) await uploadChunks(file, ttl, onProgress, currentFolderId);
+      else {
+        const headers = { 'X-Filename': encodeURIComponent(file.name), 'X-TTL': ttl, 'Content-Type': 'application/octet-stream' };
+        if(currentFolderId) headers['X-Folder-Id'] = currentFolderId;
+        await uploadRequest('POST', '/api/upload', file, headers, onProgress);
+      }
       progressBar.style.width = '100%';
       progressText.textContent = `${prefix}Concluido!`;
       statusEl.className = 'status success';
