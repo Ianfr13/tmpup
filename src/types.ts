@@ -55,6 +55,10 @@ export interface FolderListPage {
   page: number;
   page_size: number;
   total_pages: number;
+  root: {
+    file_count: number;
+    total_size_bytes: number;
+  };
 }
 
 /** Paginated listing payload. */

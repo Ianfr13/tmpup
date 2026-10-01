@@ -185,4 +185,50 @@ describe("folder REST routes", () => {
     });
     expect(txtView.statusCode).toBe(307);
   });
+
+  it("GET /api/folders returns paginated folders with root file counts and sizes", async () => {
+    // 1 file in root (11 bytes)
+    const rootUpload = await app.inject({
+      method: "POST",
+      url: "/api/upload",
+      headers: { ...authHeader(), "x-filename": "root.txt", "x-ttl": "0" },
+      payload: Buffer.from("hello world"),
+    });
+    expect(rootUpload.statusCode).toBe(200);
+
+    // 1 folder with 1 file (4 bytes)
+    const folderRes = await app.inject({
+      method: "POST",
+      url: "/api/folders",
+      headers: { ...authHeader(), "content-type": "application/json" },
+      payload: JSON.stringify({ name: "docs" }),
+    });
+    expect(folderRes.statusCode).toBe(200);
+    const folderId = folderRes.json().id as string;
+
+    const folderUpload = await app.inject({
+      method: "POST",
+      url: "/api/upload",
+      headers: { ...authHeader(), "x-filename": "inside.txt", "x-ttl": "0", "x-folder-id": folderId },
+      payload: Buffer.from("test"),
+    });
+    expect(folderUpload.statusCode).toBe(200);
+
+    const listRes = await app.inject({
+      method: "GET",
+      url: "/api/folders",
+      headers: authHeader(),
+    });
+    expect(listRes.statusCode).toBe(200);
+    const body = listRes.json();
+    expect(body.total).toBe(1);
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].id).toBe(folderId);
+    expect(body.items[0].file_count).toBe(1);
+    expect(body.items[0].total_size_bytes).toBe(4);
+    expect(body.root).toEqual({
+      file_count: 1,
+      total_size_bytes: 11,
+    });
+  });
 });

@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { unzipSync, zipSync } from "fflate";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   FolderError,
@@ -11,6 +11,7 @@ import {
   createFolderFromZip,
   deleteFolder,
   getFolderInfo,
+  listFolders,
   parseZipEntries,
   setFileFolder,
   uploadZipToFolder,
@@ -201,5 +202,69 @@ describe("folders", () => {
     const meta = new FileMetadata("id1", "a.txt", 0, Date.now() / 1000);
     const dict = await fileMetaDict(meta);
     expect(dict.folder_id).toBeNull();
+  });
+
+  it("scans file metadata once per listFolders call rather than once per folder", async () => {
+    const f1 = await createFolder("folder-1");
+    const f2 = await createFolder("folder-2");
+    const f3 = await createFolder("folder-3");
+
+    await writeFileInFolder(f1.id, "file1.txt", "aaa");
+    await writeFileInFolder(f2.id, "file2.txt", "bbbb");
+    await writeFileInFolder(f3.id, "file3.txt", "ccccc");
+
+    const spy = vi.spyOn(FileMetadata, "fromFile");
+    try {
+      const page = await listFolders();
+      expect(page.items).toHaveLength(3);
+      // 3 file sidecars in total: single scan reads each sidecar once, not 3 folders x 3 files = 9
+      expect(spy).toHaveBeenCalledTimes(3);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("returns root stats for active files with no folder, consistent across pages and ignoring expired", async () => {
+    const f1 = await createFolder("f1");
+    const f2 = await createFolder("f2");
+
+    // File in folder: should NOT count towards root
+    await writeFileInFolder(f1.id, "nested.txt", "1234567890");
+
+    const now = Math.floor(Date.now() / 1000);
+
+    // Active files in root
+    const root1 = randomUUID();
+    const p1 = getFilePaths(root1);
+    await fsp.writeFile(p1.filePath, "hello");
+    await new FileMetadata(root1, "hello.txt", 0, now, 0, 0, null, null, 5).save(p1.metadataPath);
+
+    const root2 = randomUUID();
+    const p2 = getFilePaths(root2);
+    await fsp.writeFile(p2.filePath, "world!");
+    await new FileMetadata(root2, "world.txt", 0, now, 0, 0, null, null, 6).save(p2.metadataPath);
+
+    // Expired file in root: should NOT count towards root
+    const rootExp = randomUUID();
+    const pExp = getFilePaths(rootExp);
+    await fsp.writeFile(pExp.filePath, "expired");
+    await new FileMetadata(rootExp, "exp.txt", 10, now - 100, 0, 0, null, null, 7).save(pExp.metadataPath);
+
+    config.pageSize = 1;
+
+    const page1 = await listFolders(1);
+    expect(page1.root).toEqual({
+      file_count: 2,
+      total_size_bytes: 11,
+    });
+    expect(page1.items).toHaveLength(1);
+    expect(page1.total_pages).toBe(2);
+
+    const page2 = await listFolders(2);
+    expect(page2.root).toEqual({
+      file_count: 2,
+      total_size_bytes: 11,
+    });
+    expect(page2.items).toHaveLength(1);
   });
 });
