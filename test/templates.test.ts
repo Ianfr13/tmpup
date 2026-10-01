@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { Script } from "node:vm";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -117,6 +118,12 @@ describe("frontend template contracts (painel de trabalho)", () => {
       HTML_TEMPLATE.includes('replace("/d/", "/t/")') || HTML_TEMPLATE.includes("replace('/d/', '/t/')"),
     ).toBe(true);
     expect(HTML_TEMPLATE).not.toContain('<img class="file-thumb" src="${esc(f.url)}"');
+  });
+
+  it("ships an inline script that parses (a syntax error blanks the whole page)", () => {
+    const start = HTML_TEMPLATE.lastIndexOf("<script>") + "<script>".length;
+    const source = HTML_TEMPLATE.slice(start, HTML_TEMPLATE.lastIndexOf("</script>"));
+    expect(() => new Script(source)).not.toThrow();
   });
 
   it("links to the MCP setup page and auth logout", () => {

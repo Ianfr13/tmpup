@@ -30,11 +30,11 @@
   .folder-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .folder-count{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#5c6470}
   .content-col{display:flex;flex-direction:column;flex:1;min-width:0;padding:12px 16px 0;gap:10px;overflow:hidden}
-  .dropzone{border:2px dashed #1d4ed8;background:#eef3ff;border-radius:10px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;flex-shrink:0}.dropzone.dragover{background:#e3e8ff;border-color:#173da8}
-  .dropzone-lead{display:flex;align-items:center;gap:10px;min-width:0}
-  .dropzone-ctrls{display:flex;align-items:center;gap:8px;flex-shrink:0}
+  .dropzone{border:2px dashed #1d4ed8;background:#eef3ff;border-radius:10px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;flex-shrink:0;flex-wrap:wrap}.dropzone.dragover{background:#e3e8ff;border-color:#173da8}
+  .dropzone-lead{display:flex;align-items:center;gap:10px;min-width:0;flex:1 1 260px}
+  .dropzone-ctrls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
   .dropzone-ctrls label{font-size:12px;color:#5c6470}
-  .dropzone-ctrls select{border:1px solid #cfd5dc;border-radius:6px;padding:4px 8px;font-size:12px;background:#fff;color:#1a1d21}
+  .dropzone-ctrls select{max-width:220px;border:1px solid #cfd5dc;border-radius:6px;padding:4px 8px;font-size:12px;background:#fff;color:#1a1d21}
   .progress-wrap{height:6px;background:#dfe3e8;border-radius:3px;overflow:hidden;display:none;flex-shrink:0;margin-top:2px}.progress-wrap.active{display:block}
   .progress-bar{height:100%;background:#1d4ed8;width:0%;transition:width .2s}
   .progress-text{font-size:11px;color:#5c6470;margin-top:2px}
@@ -88,11 +88,11 @@
   .bulk-select{border:1px solid #454c57;border-radius:6px;padding:4px 8px;font-size:12px;background:#2a2e33;color:#fff}
   #locSelect{display:none}
   @media (max-width: 1000px){.cell-size,.cell-exp,.cell-views,.col-size,.col-exp,.col-views{display:none}}
-  @media (max-width: 760px){.sidebar{display:none}#locSelect{display:block;width:100%;height:36px;border:1px solid #cfd5dc;border-radius:6px;padding:0 8px;font-size:13px;background:#fff;color:#1a1d21;margin-bottom:4px}}
+  @media (max-width: 760px){.sidebar,.summary-bar{display:none}#locSelect{display:block;width:100%;height:36px;border:1px solid #cfd5dc;border-radius:6px;padding:0 8px;font-size:13px;background:#fff;color:#1a1d21;margin-bottom:4px}}
   .btn-copy-link{background:#1d4ed8;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}.btn-copy-link:hover{background:#1e40af}.btn-copy-link.copied{background:#15803d}
   .renew-row{display:flex;gap:4px;padding:4px 12px;background:#f7f8fb;border-bottom:1px solid #eceff3}
   .renew-chip{background:#fff;border:1px solid #cfd5dc;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer}.renew-chip:hover{background:#e3e8ff;border-color:#1d4ed8}
-  .btn-sub-action{background:#fff;border:1px solid #dfe3e8;border-radius:6px;padding:4px 8px;font-size:12px;color:#1a1d21;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}.btn-sub-action:hover{background:#f1f4f9}
+  .btn-sub-action{background:#fff;border:1px solid #dfe3e8;border-radius:6px;padding:4px 8px;font-size:12px;color:#1a1d21;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;white-space:nowrap}.btn-sub-action:hover{background:#f1f4f9}
   .btn-sub-action.danger{color:#b42318}.btn-sub-action.danger-confirm{background:#b42318;border-color:#b42318;color:#fff}
   .empty-state{text-align:center;color:#5c6470;padding:32px;font-size:13px}
   .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1d21;color:#fff;padding:8px 16px;border-radius:6px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:999}.toast.show{opacity:1}
@@ -113,7 +113,7 @@
     <button class="place-btn active" data-place="all" type="button"><span>Tudo</span><span class="folder-count" id="countAll">0</span></button>
     <button class="place-btn" data-place="root" type="button"><span>Sem pasta</span><span class="folder-count" id="countRoot">0</span></button>
     <button class="place-btn" data-place="expiring" type="button"><span>Com validade</span></button>
-    <div class="sidebar-sec"><span>Pastas &middot; mais recentes primeiro</span><button class="btn-new-folder" id="btnNewFolder" type="button"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Nova pasta</button></div>
+    <div class="sidebar-sec"><span>Pastas &middot; mais recentes primeiro</span><button class="btn-new-folder" id="btnNewFolder" type="button" aria-label="Nova pasta" title="Nova pasta"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button></div>
     <input class="folder-filter" id="folderSearch" placeholder="Filtrar pastas">
     <div class="folder-list" id="folderList"></div>
   </aside>
@@ -209,6 +209,7 @@
   let totalPages = 1;
   let totalFiles = 0;
   let lastRootTotalFiles = 0;
+  let lastRootSizeBytes = 0;
   let currentKind = 'all';
   let currentQuery = '';
   let selectedIds = new Set();
@@ -381,6 +382,7 @@
       totalFiles = data.total_files !== undefined ? data.total_files : (data.total || 0);
       if(!currentQuery && currentKind === 'all' && (loc === 'root' || loc === 'all')) {
         lastRootTotalFiles = totalFiles;
+        lastRootSizeBytes = data.total_size_bytes || 0;
         updateSidebarCounts();
       }
       displayedFiles = append ? displayedFiles.concat(data.items) : data.items;
@@ -407,6 +409,8 @@
       updateDestSelect();
       updateSidebarCounts();
       updateLocSelect();
+      // Folder rows are part of the timeline, so the list depends on this response too.
+      renderFiles();
     } catch(e) {
       if(requestId !== loadFoldersRequestId) return;
       logError('load_folders_failed', e);
@@ -417,6 +421,9 @@
     if(countRoot) countRoot.textContent = lastRootTotalFiles;
     const foldersSum = displayedFolders.reduce((sum, f) => sum + (f.file_count || 0), 0);
     if(countAll) countAll.textContent = lastRootTotalFiles + foldersSum;
+    // Header summary covers everything: loose files plus every folder.
+    const sizeSum = displayedFolders.reduce((sum, f) => sum + (f.total_size_bytes || 0), lastRootSizeBytes);
+    summaryBar.textContent = `${lastRootTotalFiles + foldersSum} arquivos · ${formatSize(sizeSum)}`;
   }
 
   function updateDestSelect() {
@@ -477,7 +484,7 @@
   }
 
   function renderSummary() {
-    summaryBar.textContent = `${currentSummary.total} arquivos · ${formatSize(currentSummary.total_size_bytes)}`;
+    updateSidebarCounts();
   }
 
   function renderTitleRow() {
@@ -492,7 +499,7 @@
     } else {
       viewTitle.textContent = currentFolderName || 'Pasta';
     }
-    titleCount.textContent = `${totalFiles} arquivo${totalFiles === 1 ? '' : 's'}`;
+    titleCount.textContent = `${currentSummary.total} ${currentSummary.total === 1 ? 'item' : 'itens'}`;
     const inFolder = isFolder(loc);
     if(inFolder) {
       breadcrumb.innerHTML = '<button type="button" data-nav="all">Tudo</button> &nbsp;/&nbsp;';
@@ -543,14 +550,14 @@
         const folderOpts = displayedFolders.map(fo => `<option value="${esc(fo.id)}" ${f.folder_id === fo.id ? 'selected' : ''}>${esc(fo.name)}</option>`).join('');
         panelRow = `<div class="more-panel" data-panel-id="${esc(f.id)}"><a class="btn-sub-action" href="${esc(f.url)}" download="${esc(f.filename)}">Baixar</a><label style="display:inline-flex;align-items:center;gap:4px">Mover para <select class="panel-select" data-action="move-file" data-id="${esc(f.id)}"><option value="" ${!f.folder_id ? 'selected' : ''}>Sem pasta</option>${folderOpts}</select></label><span style="color:#5c6470">Validade:</span><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="3600" type="button">1 hora</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="86400" type="button">24 horas</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="604800" type="button">7 dias</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="0" type="button">Nunca expira</button>${delBtn}</div>`;
       }
-      let html = `<div class="list-row"><span class="cell-check"><input class="select-box" type="checkbox" data-action="select" data-id="${esc(f.id)}" ${selectedIds.has(f.id) ? 'checked' : ''} aria-label="Selecionar arquivo"></span><span class="cell-time">${formatTime(f.created_at || 0, row.insideDay)}</span><span class="cell-type">${thumbOrBadge}</span><div class="cell-name"><a class="row-name" href="${esc(targetUrl)}" target="_blank" rel="noopener" title="${esc(f.filename)}">${esc(f.filename)}</a>${verChip}${folderChipHtml}</div><span class="cell-size">${formatSize(f.size || 0)}</span><span class="cell-exp ${soon ? 'soon' : ''}" data-action="renew-toggle" data-id="${esc(f.id)}" style="cursor:pointer" title="Renovar validade">${remaining}</span><span class="cell-views" title="${esc(viewsTitle)}">${viewsStr}</span><span class="cell-actions"><button class="btn-copy-link" data-action="copy" data-url="${esc(f.url)}" type="button">Copiar link</button><button class="btn-sub-action btn-more" data-action="toggle-more" data-id="${esc(f.id)}" aria-label="Mais ações" type="button"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button></span></div>${panelRow}`;`;
+      let html = `<div class="list-row"><span class="cell-check"><input class="select-box" type="checkbox" data-action="select" data-id="${esc(f.id)}" ${selectedIds.has(f.id) ? 'checked' : ''} aria-label="Selecionar arquivo"></span><span class="cell-time">${formatTime(f.created_at || 0, row.insideDay)}</span><span class="cell-type">${thumbOrBadge}</span><div class="cell-name"><a class="row-name" href="${esc(targetUrl)}" target="_blank" rel="noopener" title="${esc(f.filename)}">${esc(f.filename)}</a>${verChip}${folderChipHtml}</div><span class="cell-size">${formatSize(f.size_bytes || 0)}</span><span class="cell-exp ${soon ? 'soon' : ''}" data-action="renew-toggle" data-id="${esc(f.id)}" style="cursor:pointer" title="Renovar validade">${remaining}</span><span class="cell-views" title="${esc(viewsTitle)}">${viewsStr}</span><span class="cell-actions"><button class="btn-copy-link" data-action="copy" data-url="${esc(f.url)}" type="button">Copiar link</button><button class="btn-sub-action btn-more" data-action="toggle-more" data-id="${esc(f.id)}" aria-label="Mais ações" type="button"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button></span></div>${panelRow}`;
       if(hasVersions && openVersions.has(f.id)) {
         for(const v of f.versions) {
           const isConfirming = confirmingId === v.id;
           const delBtn = isConfirming
             ? `<button class="btn-sub-action danger-confirm" data-action="delete" data-id="${esc(v.id)}" type="button">Excluir?</button>`
             : `<button class="btn-sub-action danger" data-action="delete" data-id="${esc(v.id)}" type="button">Excluir</button>`;
-          html += `<div class="list-row version-row"><span class="cell-check"></span><span class="cell-time">${formatTime(v.created_at || 0, row.insideDay)}</span><span class="cell-type"></span><div class="cell-name">versão anterior de ${esc(f.filename)}</div><span class="cell-size">${formatSize(v.size || 0)}</span><span class="cell-exp"></span><span class="cell-views"></span><span class="cell-actions"><button class="btn-sub-action" data-action="copy" data-url="${esc(v.url)}" type="button">Copiar link</button>${delBtn}</span></div>`;
+          html += `<div class="list-row version-row"><span class="cell-check"></span><span class="cell-time">${formatTime(v.created_at || 0, row.insideDay)}</span><span class="cell-type"></span><div class="cell-name">versão anterior de ${esc(f.filename)}</div><span class="cell-size">${formatSize(v.size_bytes || 0)}</span><span class="cell-exp"></span><span class="cell-views"></span><span class="cell-actions"><button class="btn-sub-action" data-action="copy" data-url="${esc(v.url)}" type="button">Copiar link</button>${delBtn}</span></div>`;
         }
       }
       return html;
@@ -987,9 +994,10 @@
 
   function formatSize(bytes) {
     if(bytes < 1024) return bytes + ' B';
-    if(bytes < 1048576) return (bytes/1024).toFixed(1) + ' KB';
-    if(bytes < 1073741824) return (bytes/1048576).toFixed(1) + ' MB';
-    return (bytes/1073741824).toFixed(2) + ' GB';
+    const comma = (n, digits) => n.toFixed(digits).replace('.', ',');
+    if(bytes < 1048576) return comma(bytes/1024, 1) + ' KB';
+    if(bytes < 1073741824) return comma(bytes/1048576, 1) + ' MB';
+    return comma(bytes/1073741824, 2) + ' GB';
   }
 
   function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
