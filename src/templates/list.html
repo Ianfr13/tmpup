@@ -52,24 +52,42 @@
   .chip{background:#fff;border:1px solid #dfe3e8;border-radius:6px;padding:4px 10px;font-size:12px;color:#454c57;cursor:pointer}.chip.active{background:#1a1d21;color:#fff;border-color:#1a1d21}
   .list-card{background:#fff;border:1px solid #dfe3e8;border-radius:10px 10px 0 0;flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column}
   .list-header{position:sticky;top:0;background:#fff;border-bottom:1px solid #eceff3;padding:8px 12px;display:flex;align-items:center;gap:8px;font-size:11px;font-weight:600;color:#5c6470;text-transform:uppercase;z-index:2}
-  .file-list-body{flex:1;padding:8px 12px}
+  .file-list-body{flex:1;padding:0}
   .load-more-btn{margin:12px auto;padding:8px 16px;border:1px solid #dfe3e8;border-radius:6px;background:#fff;font-size:13px;font-weight:600;color:#1a1d21;cursor:pointer;display:block}.load-more-btn:hover{background:#f1f4f9}
   .bulk-bar{display:none;align-items:center;gap:10px;background:#1a1d21;border-radius:8px;padding:8px 12px;font-size:12px;color:#fff}.bulk-bar.active{display:flex}
   .bulk-btn{background:#2a2e33;border:1px solid #454c57;border-radius:6px;padding:4px 10px;font-size:12px;color:#fff;cursor:pointer}.bulk-btn.danger{background:#7f1d1d;border-color:#b42318;color:#fecaca}
   .bulk-cancel{background:none;border:none;color:#93c5fd;font-size:12px;cursor:pointer;text-decoration:underline}
-  .file-card{background:#fff;border:1px solid #eceff3;border-radius:8px;padding:10px 12px;margin-bottom:6px;display:flex;align-items:center;gap:12px}.file-card:hover{background:#f1f4f9}
-  .file-lead{display:flex;align-items:center;gap:10px;flex-shrink:0}
+  .list-row{display:flex;align-items:center;gap:8px;height:38px;padding:0 12px;border-bottom:1px solid #eceff3;font-size:13px;color:#1a1d21}.list-row:hover{background:#f1f4f9}
+  .list-row.folder-row{background:#fffaf0}
+  .list-row.version-row{height:32px;background:#f7f8fb;font-size:12px;color:#454c57}
+  .day-header{display:flex;align-items:baseline;gap:8px;padding:10px 12px 6px;border-bottom:1px solid #eceff3}
+  .day-title{font-size:13px;font-weight:700;color:#1a1d21}
+  .day-sub{font-size:12px;color:#5c6470}
+  .cell-check{width:18px;display:flex;align-items:center;flex-shrink:0}
   .select-box{width:16px;height:16px;accent-color:#1d4ed8;cursor:pointer}
-  .file-info{flex:1;min-width:0}
-  .file-name{font-size:13px;font-weight:500;color:#1a1d21;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .file-meta{font-size:12px;color:#5c6470;margin-top:2px;display:flex;gap:10px;flex-wrap:wrap}.file-meta .soon{color:#9a3412;font-weight:600}
-  .file-metrics{font-size:11px;color:#5c6470;margin-top:2px;display:flex;gap:8px}
-  .renew-row{margin-top:6px;display:flex;gap:4px}
-  .renew-chip{background:#f5f6f8;border:1px solid #cfd5dc;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer}.renew-chip:hover{background:#e3e8ff;border-color:#1d4ed8}
-  .file-actions{display:flex;gap:4px;flex-shrink:0}
-  .btn-icon{background:#fff;border:1px solid #dfe3e8;border-radius:6px;padding:6px 8px;cursor:pointer;font-size:12px;color:#1a1d21;text-decoration:none;display:inline-flex;align-items:center;gap:4px}.btn-icon:hover{background:#f1f4f9}
-  .btn-icon.copied{background:#dcf5e7;border-color:#166534;color:#166534}.btn-icon.active{background:#e3e8ff;border-color:#1d4ed8;color:#1d4ed8}.btn-icon.danger{color:#b42318}.btn-icon.danger:hover{background:#fff2f0;border-color:#b42318}.btn-icon.danger-confirm{background:#b42318;border-color:#b42318;color:#fff}
-  .file-thumb{width:40px;height:40px;object-fit:cover;border-radius:6px;border:1px solid #dfe3e8}
+  .cell-time{width:84px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#5c6470;flex-shrink:0}
+  .cell-type{width:46px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .cell-name{flex:1;min-width:0;display:flex;align-items:center;gap:6px;overflow:hidden}
+  .row-name{color:#1a1d21;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}.row-name:hover{text-decoration:underline}
+  .folder-name-btn{background:none;border:none;padding:0;font-size:13px;font-weight:700;color:#1a1d21;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.folder-name-btn:hover{text-decoration:underline}
+  .cell-size{width:78px;text-align:right;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#454c57;flex-shrink:0}
+  .cell-exp{width:64px;text-align:right;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#454c57;flex-shrink:0}
+  .cell-exp.soon{color:#9a3412;font-weight:700}
+  .cell-views{width:52px;text-align:right;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:#454c57;flex-shrink:0;cursor:default}
+  .cell-actions{width:138px;display:flex;justify-content:flex-end;align-items:center;gap:6px;flex-shrink:0}
+  .type-badge{width:46px;height:22px;border-radius:5px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px;font-weight:700;line-height:22px;text-align:center;letter-spacing:.03em;display:inline-block}
+  .badge-image{background:#dcf5e7;color:#14532d}
+  .badge-video{background:#e3e8ff;color:#27348b}
+  .badge-document{background:#fdefd2;color:#7c4a03}
+  .badge-other{background:#e9ecf0;color:#2f3640}
+  .file-thumb{width:28px;height:28px;object-fit:cover;border-radius:4px;display:block}
+  .ver-chip{background:#e3e8ff;color:#27348b;border:none;border-radius:999px;font-size:11px;font-weight:700;padding:1px 7px;cursor:pointer;flex-shrink:0}
+  .folder-chip{background:#f3e3c2;color:#5a3d05;border-radius:999px;font-size:11px;font-weight:600;padding:1px 7px;white-space:nowrap;flex-shrink:0}
+  .btn-copy-link{background:#1d4ed8;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}.btn-copy-link:hover{background:#1e40af}.btn-copy-link.copied{background:#15803d}
+  .renew-row{display:flex;gap:4px;padding:4px 12px;background:#f7f8fb;border-bottom:1px solid #eceff3}
+  .renew-chip{background:#fff;border:1px solid #cfd5dc;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer}.renew-chip:hover{background:#e3e8ff;border-color:#1d4ed8}
+  .btn-sub-action{background:#fff;border:1px solid #dfe3e8;border-radius:6px;padding:4px 8px;font-size:12px;color:#1a1d21;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}.btn-sub-action:hover{background:#f1f4f9}
+  .btn-sub-action.danger{color:#b42318}.btn-sub-action.danger-confirm{background:#b42318;border-color:#b42318;color:#fff}
   .empty-state{text-align:center;color:#5c6470;padding:32px;font-size:13px}
   .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1d21;color:#fff;padding:8px 16px;border-radius:6px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:999}.toast.show{opacity:1}
 </style>
@@ -182,6 +200,7 @@
   let currentKind = 'all';
   let currentQuery = '';
   let selectedIds = new Set();
+  let openVersions = new Set();
   let confirmingId = null;
   let renewingId = null;
   let searchDebounceTimer = null;
@@ -470,57 +489,42 @@
     loadMoreBtn.style.display = (currentPage < totalPages) ? 'block' : 'none';
   }
 
-  function renderFiles(items) {
-    if(!items.length) { fileList.innerHTML = '<div class="empty-state">Nenhum arquivo encontrado</div>'; return; }
-    fileList.innerHTML = items.map(f => {
-      const icon = getFileIcon(f.filename);
-      const remaining = formatCountdown(f.expires_in);
-      const soon = f.expires_in >= 0 && f.expires_in < 3600;
-      const created = new Date(f.created_at * 1000).toLocaleString('pt-BR', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
-      const thumbOrIcon = f.is_image
-        ? `<img class="file-thumb" src="${esc(f.url.replace('/d/', '/t/'))}" alt="${esc(f.filename)}" loading="lazy">`
-        : `<span class="file-icon">${icon}</span>`;
-      const openBtn = isPreviewable(f.filename)
-        ? `<a class="btn-icon" href="${esc(f.view_url)}" target="_blank" title="Visualizar">&#128065; Ver</a>`
-        : `<a class="btn-icon" href="${esc(f.url)}" target="_blank" title="Abrir">&#128279;</a>`;
-      const isConfirming = confirmingId === f.id;
-      const deleteBtn = isConfirming
-        ? `<button class="btn-icon danger-confirm" data-action="delete" data-id="${f.id}" title="Confirmar exclusao">Excluir?</button>`
-        : `<button class="btn-icon danger" data-action="delete" data-id="${f.id}" title="Excluir">&#128465;</button>`;
-      const isRenewing = renewingId === f.id;
-      const renewRow = isRenewing ? `
-        <div class="renew-row">
-          <button class="renew-chip" data-action="renew-apply" data-id="${f.id}" data-ttl="3600">1 hora</button>
-          <button class="renew-chip" data-action="renew-apply" data-id="${f.id}" data-ttl="86400">24 horas</button>
-          <button class="renew-chip" data-action="renew-apply" data-id="${f.id}" data-ttl="604800">7 dias</button>
-          <button class="renew-chip" data-action="renew-apply" data-id="${f.id}" data-ttl="0">Nunca expira</button>
-        </div>` : '';
-      const views = f.views || 0;
-      const downloads = f.downloads || 0;
-      return `<div class="file-card">
-        <div class="file-lead">
-          <input class="select-box" type="checkbox" data-action="select" data-id="${f.id}" ${selectedIds.has(f.id) ? 'checked' : ''}>
-          ${thumbOrIcon}
-        </div>
-        <div class="file-info">
-          <div class="file-name" title="${esc(f.filename)}">${esc(f.filename)}</div>
-          <div class="file-meta">
-            <span class="${soon ? 'soon' : ''}">&#9200; ${remaining}</span>
-            <span>&#128197; ${created}</span>
-          </div>
-          <div class="file-metrics">
-            <span class="${views === 0 ? 'zero' : ''}">&#128065; ${views} visualiza${views===1?'cao':'coes'} &middot; ultima: ${formatLast(f.last_viewed_at)}</span>
-            <span class="${downloads === 0 ? 'zero' : ''}">&#11015; ${downloads} download${downloads===1?'':'s'} &middot; ultimo: ${formatLast(f.last_downloaded_at)}</span>
-          </div>
-          ${renewRow}
-        </div>
-        <div class="file-actions">
-          <button class="btn-icon ${isRenewing ? 'active' : ''}" data-action="renew-toggle" data-id="${f.id}" title="Renovar validade">&#128260;</button>
-          <button class="btn-icon" data-action="copy" data-url="${esc(f.url)}" title="Copiar link">&#128203;</button>
-          ${openBtn}
-          ${deleteBtn}
-        </div>
-      </div>`;
+  function renderFiles() {
+    const rows = buildRows({
+      files: displayedFiles, folders: displayedFolders, view: loc,
+      kind: currentKind, query: currentQuery, allLoaded: (currentPage >= totalPages), now: new Date()
+    });
+    if(!rows.length) { fileList.innerHTML = '<div class="empty-state">Nenhum arquivo encontrado</div>'; return; }
+    fileList.innerHTML = rows.map(row => {
+      if(row.type === 'day') {
+        return `<div class="day-header"><div class="day-title">${esc(row.label)}</div><div class="day-sub">${esc(row.summary)}</div></div>`;
+      }
+      if(row.type === 'folder') {
+        const fo = row.folder || row, cnt = fo.file_count === 1 ? '1 arquivo' : `${fo.file_count || 0} arquivos`;
+        return `<div class="list-row folder-row"><span class="cell-check"></span><span class="cell-time">${formatTime(fo.updated_at || 0, row.insideDay)}</span><span class="cell-type"><svg width="20" height="20" viewBox="0 0 24 24" fill="#c98a1b"><path d="M2 7a3 3 0 0 1 3-3h4.2a2 2 0 0 1 1.5.7L12 6h7a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3z"/></svg></span><div class="cell-name"><button class="folder-name-btn" data-action="open-folder" data-id="${esc(fo.id)}" data-name="${esc(fo.name)}" type="button">${esc(fo.name)}</button><span class="folder-chip">${cnt}</span></div><span class="cell-size">${formatSize(fo.total_size_bytes || 0)}</span><span class="cell-exp"></span><span class="cell-views"></span><span class="cell-actions"><button class="btn-sub-action" data-action="open-folder" data-id="${esc(fo.id)}" data-name="${esc(fo.name)}" type="button">Abrir</button><a class="btn-sub-action" href="/api/folders/${esc(fo.id)}/download">.zip</a></span></div>`;
+      }
+      const f = row.file || row;
+      const targetUrl = (f.view_url && isPreviewable(f.filename)) ? f.view_url : f.url;
+      const thumbOrBadge = f.is_image
+        ? `<img class="file-thumb" src="${esc(f.url.replace('/d/', '/t/'))}" alt="" loading="lazy">`
+        : `<span class="type-badge badge-${deriveKind(f.filename, f.is_image)}">${esc((f.filename.split('.').pop() || '').toUpperCase().slice(0, 4))}</span>`;
+      const hasVersions = Array.isArray(f.versions) && f.versions.length > 0;
+      const verChip = hasVersions ? `<button class="ver-chip" data-action="toggle-ver" data-id="${esc(f.id)}" type="button">${f.versions.length + 1} versões</button>` : '';
+      const remaining = formatCountdown(f.expires_in), soon = f.expires_in > 0 && f.expires_in < 3600;
+      const viewsStr = f.views ? `${f.views}×` : '—';
+      const viewsTitle = `${f.downloads || 0} download(s) · última visualização: ${formatLast(f.last_viewed_at)}`;
+      const renewRow = (renewingId === f.id) ? `<div class="renew-row"><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="3600" type="button">1 hora</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="86400" type="button">24 horas</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="604800" type="button">7 dias</button><button class="renew-chip" data-action="renew-apply" data-id="${esc(f.id)}" data-ttl="0" type="button">Nunca expira</button></div>` : '';
+      let html = `<div class="list-row"><span class="cell-check"><input class="select-box" type="checkbox" data-action="select" data-id="${esc(f.id)}" ${selectedIds.has(f.id) ? 'checked' : ''} aria-label="Selecionar arquivo"></span><span class="cell-time">${formatTime(f.created_at || 0, row.insideDay)}</span><span class="cell-type">${thumbOrBadge}</span><div class="cell-name"><a class="row-name" href="${esc(targetUrl)}" target="_blank" rel="noopener" title="${esc(f.filename)}">${esc(f.filename)}</a>${verChip}</div><span class="cell-size">${formatSize(f.size || 0)}</span><span class="cell-exp ${soon ? 'soon' : ''}" data-action="renew-toggle" data-id="${esc(f.id)}" style="cursor:pointer" title="Renovar validade">${remaining}</span><span class="cell-views" title="${esc(viewsTitle)}">${viewsStr}</span><span class="cell-actions"><button class="btn-copy-link" data-action="copy" data-url="${esc(f.url)}" type="button">Copiar link</button></span></div>${renewRow}`;
+      if(hasVersions && openVersions.has(f.id)) {
+        for(const v of f.versions) {
+          const isConfirming = confirmingId === v.id;
+          const delBtn = isConfirming
+            ? `<button class="btn-sub-action danger-confirm" data-action="delete" data-id="${esc(v.id)}" type="button">Excluir?</button>`
+            : `<button class="btn-sub-action danger" data-action="delete" data-id="${esc(v.id)}" type="button">Excluir</button>`;
+          html += `<div class="list-row version-row"><span class="cell-check"></span><span class="cell-time">${formatTime(v.created_at || 0, row.insideDay)}</span><span class="cell-type"></span><div class="cell-name">versão anterior de ${esc(f.filename)}</div><span class="cell-size">${formatSize(v.size || 0)}</span><span class="cell-exp"></span><span class="cell-views"></span><span class="cell-actions"><button class="btn-sub-action" data-action="copy" data-url="${esc(v.url)}" type="button">Copiar link</button>${delBtn}</span></div>`;
+        }
+      }
+      return html;
     }).join('');
   }
 
@@ -542,16 +546,16 @@
 
     if(action === 'copy') { copyLink(btn.dataset.url, btn); return; }
 
-    if(action === 'delete') {
-      if(confirmingId === id) {
-        confirmingId = null;
-        const res = await fetch(`/api/files/${id}`, { method: 'DELETE' });
-        if(res.ok) { showToast('Arquivo removido'); selectedIds.delete(id); await loadFiles(); }
-        else { logError('delete_file_failed', res.statusText, id); showToast('Erro ao excluir'); }
-      } else {
-        confirmingId = id;
-        render();
-      }
+    if(action === 'open-folder') {
+      currentFolderName = btn.dataset.name || '';
+      navigate(id);
+      return;
+    }
+
+    if(action === 'toggle-ver') {
+      if(openVersions.has(id)) openVersions.delete(id);
+      else openVersions.add(id);
+      renderFiles();
       return;
     }
 
@@ -564,11 +568,34 @@
     if(action === 'renew-apply') {
       const ttl = parseInt(btn.dataset.ttl, 10);
       renewingId = null;
-      const res = await fetch(`/api/files/${id}/ttl`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttl })
-      });
-      if(res.ok) { showToast('Validade renovada'); await loadFiles(); }
-      else { logError('renew_file_failed', res.statusText, id); showToast('Erro ao renovar'); }
+      try {
+        const res = await fetch(`/api/files/${id}/ttl`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ttl })
+        });
+        if(res.ok) { showToast('Validade renovada'); await loadFiles(); }
+        else { logError('renew_file_failed', res.statusText, id); showToast('Erro ao renovar'); }
+      } catch(e) {
+        logError('renew_file_failed', e, id);
+        showToast('Erro ao renovar');
+      }
+      return;
+    }
+
+    if(action === 'delete') {
+      if(confirmingId === id) {
+        confirmingId = null;
+        try {
+          const res = await fetch(`/api/files/${id}`, { method: 'DELETE' });
+          if(res.ok) { showToast('Arquivo removido'); selectedIds.delete(id); await loadFiles(); }
+          else { logError('delete_file_failed', res.statusText, id); showToast('Erro ao excluir'); }
+        } catch(e) {
+          logError('delete_file_failed', e, id);
+          showToast('Erro ao excluir');
+        }
+      } else {
+        confirmingId = id;
+        render();
+      }
       return;
     }
   });
@@ -741,28 +768,79 @@
     await loadFiles();
   });
 
-  function getFileIcon(name) {
-    const ext = (name.split('.').pop() || '').toLowerCase();
-    const map = {
-      pdf:'&#128196;', doc:'&#128196;', docx:'&#128196;', txt:'&#128196;',
-      png:'&#128444;', jpg:'&#128444;', jpeg:'&#128444;', gif:'&#128444;', webp:'&#128444;', svg:'&#128444;',
-      mp4:'&#127909;', mov:'&#127909;', avi:'&#127909;', mkv:'&#127909;', webm:'&#127909;',
-      mp3:'&#127925;', wav:'&#127925;', flac:'&#127925;', ogg:'&#127925;',
-      zip:'&#128230;', rar:'&#128230;', tar:'&#128230;', gz:'&#128230;', '7z':'&#128230;',
-      js:'&#128187;', ts:'&#128187;', py:'&#128187;', json:'&#128187;', html:'&#128187;', css:'&#128187;',
-    };
-    return map[ext] || '&#128193;';
+  function formatTime(epochSec, insideDay) {
+    if(!epochSec) return '';
+    const d = new Date(epochSec * 1000);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    if(insideDay) return `${hh}:${mm}`;
+    const day = String(d.getDate()).padStart(2, '0');
+    const mo = String(d.getMonth() + 1).padStart(2, '0');
+    return `${day}/${mo} ${hh}:${mm}`;
   }
 
   function formatCountdown(seconds) {
-    if(seconds < 0) return 'Nunca expira';
-    if(seconds === 0) return 'Expirado';
+    if(seconds === undefined || seconds === null || seconds < 0) return 'nunca';
+    if(seconds === 0) return 'expirado';
     if(seconds < 60) return `${seconds}s`;
     if(seconds < 3600) return `${Math.floor(seconds/60)}min`;
-    if(seconds < 86400) { const h = Math.floor(seconds/3600); const m = Math.floor((seconds%3600)/60); return `${h}h ${m}min`; }
+    if(seconds < 86400) { const h = Math.floor(seconds/3600); const m = Math.floor((seconds%3600)/60); return m > 0 ? `${h}h ${m}min` : `${h}h`; }
     const d = Math.floor(seconds/86400); const h = Math.floor((seconds%86400)/3600);
-    return `${d}d ${h}h`;
+    return h > 0 ? `${d}d ${h}h` : `${d}d`;
   }
+
+  // --- pure helpers (tested) ---
+  function deriveKind(name, isImage) {
+    if(isImage) return 'image';
+    const ext = ((name || '').split('.').pop() || '').toLowerCase();
+    if(['mp4','mov','avi','mkv','webm'].includes(ext)) return 'video';
+    if(['pdf','doc','docx','txt','md','html','csv','xls','xlsx','ppt','pptx','json'].includes(ext)) return 'document';
+    return 'other';
+  }
+
+  function buildRows({ files, folders, view, kind, query, allLoaded, now }) {
+    const fileList = files || [], folderList = folders || [], q = (query || '').trim().toLowerCase();
+    if(q) {
+      const match = (!kind || kind === 'all') ? folderList.filter(fo => (fo.name || '').toLowerCase().includes(q)) : [];
+      return [...match.map(fo => ({ type: 'folder', ...fo, folder: fo, insideDay: false })), ...fileList.map(f => ({ type: 'file', ...f, file: f, insideDay: false }))];
+    }
+    if(view && view !== 'all' && view !== 'root') return fileList.map(f => ({ type: 'file', ...f, file: f, insideDay: false }));
+    let eligible = [];
+    if((view === 'all' || !view) && (!kind || kind === 'all')) {
+      const oldest = fileList.length > 0 ? Math.min(...fileList.map(f => f.created_at)) : null;
+      eligible = folderList.filter(fo => allLoaded || (oldest !== null && (fo.updated_at || 0) >= oldest));
+    }
+    const entries = [...eligible.map(fo => ({ type: 'folder', time: fo.updated_at || 0, data: fo })), ...fileList.map(f => ({ type: 'file', time: f.created_at || 0, data: f }))];
+    entries.sort((a, b) => (b.time - a.time) || (a.type === 'folder' ? -1 : 1));
+    const nowDate = now instanceof Date ? now : (typeof now === 'number' ? (now > 1e11 ? new Date(now) : new Date(now * 1000)) : new Date());
+    const nowYear = nowDate.getFullYear(), yest = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate() - 1);
+    const MONTHS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+    const sameDay = (d1, d2) => d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+    const dayLabel = d => {
+      const base = `${d.getDate()} ${MONTHS[d.getMonth()]}${d.getFullYear() !== nowYear ? ' ' + d.getFullYear() : ''}`;
+      return sameDay(d, nowDate) ? `Hoje · ${base}` : (sameDay(d, yest) ? `Ontem · ${base}` : base);
+    };
+    const dayGroups = [];
+    let curGroup = null, curKey = null;
+    for(const entry of entries) {
+      const d = new Date(entry.time * 1000), key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      if(key !== curKey) { curKey = key; curGroup = { date: d, entries: [] }; dayGroups.push(curGroup); }
+      curGroup.entries.push(entry);
+    }
+    const rows = [];
+    for(const g of dayGroups) {
+      const fos = g.entries.filter(e => e.type === 'folder'), fis = g.entries.filter(e => e.type === 'file'), parts = [];
+      if(fos.length) parts.push(fos.length === 1 ? '1 pasta' : `${fos.length} pastas`);
+      if(fis.length) parts.push(fis.length === 1 ? '1 arquivo solto' : `${fis.length} arquivos soltos`);
+      const summary = parts.join(' · ');
+      rows.push({ type: 'day', label: dayLabel(g.date), summary, sub: summary });
+      for(const entry of g.entries) {
+        rows.push({ type: entry.type, ...entry.data, [entry.type]: entry.data, insideDay: true });
+      }
+    }
+    return rows;
+  }
+  // --- end pure helpers ---
 
   function formatLast(epoch) {
     if(!epoch) return 'nunca';
@@ -801,7 +879,7 @@
   function showToast(msg) { toast.textContent = msg; toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2000); }
 
   setInterval(() => {
-    if(currentPage === 1 && selectedIds.size === 0 && !confirmingId && !renewingId) {
+    if(currentPage === 1 && selectedIds.size === 0 && !confirmingId && !renewingId && openVersions.size === 0) {
       loadFiles();
       loadFolders();
     }

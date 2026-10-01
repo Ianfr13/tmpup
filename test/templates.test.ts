@@ -171,4 +171,8 @@ describe("frontend template contracts (painel de trabalho)", () => {
     expect(HTML_TEMPLATE).toContain("tmpup-web");
     expect(HTML_TEMPLATE).toContain("console.error");
   });
+
+  it("pins the absence of emoji entities (&#1...)", () => {
+    expect(HTML_TEMPLATE).not.toContain("&#1");
+  });
 });
