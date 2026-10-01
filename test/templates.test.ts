@@ -111,7 +111,7 @@ describe("page entry points", () => {
     expect(renderLoginPage()).toBe(LOGIN_HTML);
   });
 });
-describe("frontend template contracts (ported from test_app.py)", () => {
+describe("frontend template contracts (painel de trabalho)", () => {
   it("uses the /t/ thumbnail route instead of the raw /d/ url", () => {
     expect(
       HTML_TEMPLATE.includes('replace("/d/", "/t/")') || HTML_TEMPLATE.includes("replace('/d/', '/t/')"),
@@ -119,31 +119,56 @@ describe("frontend template contracts (ported from test_app.py)", () => {
     expect(HTML_TEMPLATE).not.toContain('<img class="file-thumb" src="${esc(f.url)}"');
   });
 
-  it("contains pagination UI and client-side logic", () => {
-    expect(HTML_TEMPLATE).toContain("Anterior");
-    expect(HTML_TEMPLATE).toContain("Proxima");
-    expect(HTML_TEMPLATE).toContain("prevPageBtn");
-    expect(HTML_TEMPLATE).toContain("nextPageBtn");
-    expect(HTML_TEMPLATE.includes("/api/files?") || HTML_TEMPLATE.includes("URLSearchParams")).toBe(true);
-    expect(HTML_TEMPLATE).toContain("currentPage = 1");
-  });
-
-  it("contains search debounce, request token and page clamp", () => {
-    expect(HTML_TEMPLATE).toContain("searchDebounceTimer");
-    expect(HTML_TEMPLATE).toContain("clearTimeout(searchDebounceTimer)");
-    expect(HTML_TEMPLATE).toContain("setTimeout");
-    expect(HTML_TEMPLATE).toContain("300");
-    expect(HTML_TEMPLATE).toContain("loadFilesRequestId");
-    expect(HTML_TEMPLATE).toContain("requestId !== loadFilesRequestId");
-    expect(HTML_TEMPLATE).toContain("Math.min(currentPage");
-    expect(
-      HTML_TEMPLATE.includes("currentPage > validPage") ||
-        HTML_TEMPLATE.includes("currentPage !== validPage"),
-    ).toBe(true);
-  });
-
-  it("links to the MCP setup page", () => {
+  it("links to the MCP setup page and auth logout", () => {
     expect(HTML_TEMPLATE).toContain('href="/mcp-setup"');
     expect(HTML_TEMPLATE).toContain("MCP");
+    expect(HTML_TEMPLATE).toContain('href="/auth/logout"');
+    expect(HTML_TEMPLATE).toContain("Sair");
+  });
+
+  it("pins header, sidebar, upload strip and title row layout elements", () => {
+    expect(HTML_TEMPLATE).toContain('id="searchInput"');
+    expect(HTML_TEMPLATE).toContain('id="summaryBar"');
+    expect(HTML_TEMPLATE).toContain('id="userEmail"');
+    expect(HTML_TEMPLATE).toContain("Tudo");
+    expect(HTML_TEMPLATE).toContain("Sem pasta");
+    expect(HTML_TEMPLATE).toContain("Com validade");
+    expect(HTML_TEMPLATE).toContain('id="btnNewFolder"');
+    expect(HTML_TEMPLATE).toContain("Filtrar pastas");
+    expect(HTML_TEMPLATE).toContain('id="folderList"');
+    expect(HTML_TEMPLATE).toContain('id="destSelect"');
+    expect(HTML_TEMPLATE).toContain('id="ttlSelect"');
+    expect(HTML_TEMPLATE).toContain('id="breadcrumb"');
+    expect(HTML_TEMPLATE).toContain('id="btnDownloadFolder"');
+    expect(HTML_TEMPLATE).toContain('id="btnDeleteFolder"');
+    expect(HTML_TEMPLATE).toContain('data-kind="all"');
+    expect(HTML_TEMPLATE).toContain('data-kind="image"');
+    expect(HTML_TEMPLATE).toContain('data-kind="document"');
+    expect(HTML_TEMPLATE).toContain('data-kind="video"');
+    expect(HTML_TEMPLATE).toContain('data-kind="archive"');
+  });
+
+  it("uses load-more pagination and removes prev/next page buttons", () => {
+    expect(HTML_TEMPLATE).toContain("Carregar mais antigos");
+    expect(HTML_TEMPLATE).toContain('id="loadMoreBtn"');
+    expect(HTML_TEMPLATE).not.toContain("prevPageBtn");
+    expect(HTML_TEMPLATE).not.toContain("nextPageBtn");
+    expect(HTML_TEMPLATE).not.toContain("Anterior");
+    expect(HTML_TEMPLATE).not.toContain("Proxima");
+  });
+
+  it("contains view navigation queries with stack=1 and expiring=1, request guard and debounce", () => {
+    expect(HTML_TEMPLATE).toContain("stack=1");
+    expect(HTML_TEMPLATE).toContain("expiring=1");
+    expect(HTML_TEMPLATE).toContain("loadFilesRequestId");
+    expect(HTML_TEMPLATE).toContain("requestId !== loadFilesRequestId");
+    expect(HTML_TEMPLATE).toContain("searchDebounceTimer");
+    expect(HTML_TEMPLATE).toContain("clearTimeout(searchDebounceTimer)");
+    expect(HTML_TEMPLATE).toContain("300");
+  });
+
+  it("contains structured logging for error branches", () => {
+    expect(HTML_TEMPLATE).toContain("tmpup-web");
+    expect(HTML_TEMPLATE).toContain("console.error");
   });
 });
