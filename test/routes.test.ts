@@ -1479,6 +1479,57 @@ describe("listing and pagination", () => {
     // Exactly 3600s must NOT be counted in expiring_soon_count (< 3600)
     expect(data.expiring_soon_count).toBe(1);
   });
+
+  it("test_api_files_stack_and_expiring_query_params", async () => {
+    const app = await authServer();
+    const baseTime = nowSeconds();
+
+    // Two files with same filename in root: one older (permanent), one newer (expiring)
+    await storeRawFile("file-old", "document.txt", 0, baseTime, 10);
+    await storeRawFile("file-new", "document.txt", 7200, baseTime + 10, 20);
+    // A third file (permanent)
+    await storeRawFile("file-perm", "notes.txt", 0, baseTime + 5, 15);
+
+    // Default: no stack, no expiring filter
+    const resDefault = await app.inject({ method: "GET", url: "/api/files", headers: authHeader() });
+    expect(resDefault.statusCode).toBe(200);
+    const dataDefault = resDefault.json();
+    expect(dataDefault.total).toBe(3);
+    expect("total_files" in dataDefault).toBe(false);
+    for (const it of dataDefault.items) {
+      expect("versions" in it).toBe(false);
+    }
+
+    // Non-literal "1" values do NOT enable stack or expiring
+    const resTruthy = await app.inject({ method: "GET", url: "/api/files?stack=true&expiring=true", headers: authHeader() });
+    const dataTruthy = resTruthy.json();
+    expect(dataTruthy.total).toBe(3);
+    expect("total_files" in dataTruthy).toBe(false);
+
+    // Literal stack=1 enables stacking
+    const resStack = await app.inject({ method: "GET", url: "/api/files?stack=1", headers: authHeader() });
+    const dataStack = resStack.json();
+    expect(dataStack.total_files).toBe(3);
+    expect(dataStack.total).toBe(2);
+    const stackedDoc = dataStack.items.find((f: any) => f.filename === "document.txt");
+    expect(stackedDoc.id).toBe("file-new");
+    expect(stackedDoc.versions).toHaveLength(1);
+    expect(stackedDoc.versions[0].id).toBe("file-old");
+
+    // Literal expiring=1 enables expiry filter
+    const resExp = await app.inject({ method: "GET", url: "/api/files?expiring=1", headers: authHeader() });
+    const dataExp = resExp.json();
+    expect(dataExp.total).toBe(1);
+    expect(dataExp.items[0].id).toBe("file-new");
+
+    // Both stack=1 and expiring=1
+    const resBoth = await app.inject({ method: "GET", url: "/api/files?stack=1&expiring=1", headers: authHeader() });
+    const dataBoth = resBoth.json();
+    expect(dataBoth.total_files).toBe(1);
+    expect(dataBoth.total).toBe(1);
+    expect(dataBoth.items[0].id).toBe("file-new");
+    expect("versions" in dataBoth.items[0]).toBe(false);
+  });
 });
 
 describe("MCP setup and pages", () => {

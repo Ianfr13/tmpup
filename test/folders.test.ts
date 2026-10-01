@@ -30,15 +30,21 @@ function zipOf(files: Record<string, string>): Uint8Array {
   return zipSync(encoded);
 }
 
-async function writeFileInFolder(folderId: string, filename: string, body: string): Promise<string> {
+async function writeFileInFolder(
+  folderId: string,
+  filename: string,
+  body: string,
+  createdAt = Date.now() / 1000,
+  ttl = 0,
+): Promise<string> {
   const fileId = randomUUID();
   const { filePath, metadataPath } = getFilePaths(fileId);
   await fsp.writeFile(filePath, body);
   await new FileMetadata(
     fileId,
     filename,
-    0,
-    Date.now() / 1000,
+    ttl,
+    createdAt,
     0,
     0,
     null,
@@ -66,6 +72,29 @@ describe("folders", () => {
     expect(folder.download_url).toContain(`/api/folders/${folder.id}/download`);
     const info = await getFolderInfo(folder.id);
     expect(info?.id).toBe(folder.id);
+  });
+
+  it("tracks updated_at as greatest created_at of active members or folder created_at when none", async () => {
+    const folder = await createFolder("activity");
+    expect(folder.updated_at).toBe(folder.created_at);
+
+    const now = Math.floor(Date.now() / 1000);
+    const t1 = now - 100;
+    const t2 = now - 80;
+    const tExpired = now - 50;
+
+    await writeFileInFolder(folder.id, "f1.txt", "one", t1);
+    const info1 = await getFolderInfo(folder.id);
+    expect(info1?.updated_at).toBe(t1);
+
+    await writeFileInFolder(folder.id, "f2.txt", "two", t2);
+    const info2 = await getFolderInfo(folder.id);
+    expect(info2?.updated_at).toBe(t2);
+
+    // Expired file with higher created_at than t2: should be ignored
+    await writeFileInFolder(folder.id, "expired.txt", "exp", tExpired, 10);
+    const info3 = await getFolderInfo(folder.id);
+    expect(info3?.updated_at).toBe(t2);
   });
 
   it("rejects duplicate names case-insensitively and invalid names", async () => {

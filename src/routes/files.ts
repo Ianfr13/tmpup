@@ -130,6 +130,8 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       kind?: string | string[];
       sort?: string | string[];
       folder_id?: string | string[];
+      stack?: string | string[];
+      expiring?: string | string[];
     };
   }>("/api/files", async (request) => {
     const allFiles = await listActiveFiles();
@@ -139,6 +141,8 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       sort: firstValue(request.query.sort) ?? "date",
       page: parsePage(firstValue(request.query.page)),
       folderId: firstValue(request.query.folder_id),
+      stack: firstValue(request.query.stack) === "1",
+      expiring: firstValue(request.query.expiring) === "1",
     });
   });
 

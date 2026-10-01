@@ -353,6 +353,64 @@ describe("filter_sort_paginate_files", () => {
     // Test expiring_soon_count: expires_in between 0 and 3600 (only a.txt has 10s)
     expect(resSortSize.expiring_soon_count).toBe(1);
     expect(resSortSize.total_size_bytes).toBe(800);
+
+    // Test expiring: true keeps only expires_in >= 0
+    const filesWithExpiry = [
+      { filename: "perm.txt", expires_in: -1, created_at: 1 },
+      { filename: "exp-zero.txt", expires_in: 0, created_at: 2 },
+      { filename: "exp-soon.txt", expires_in: 100, created_at: 3 },
+    ] as unknown as PublicFileMetadata[];
+    const resExpiring = filterSortPaginateFiles(filesWithExpiry, { expiring: true });
+    expect(resExpiring.items.map((f) => f.filename)).toEqual(["exp-soon.txt", "exp-zero.txt"]);
+    expect(resExpiring.total).toBe(2);
+
+    const resDefaultExpiring = filterSortPaginateFiles(filesWithExpiry);
+    expect(resDefaultExpiring.items.length).toBe(3);
+
+    // Test stacking: collapses same filename AND folder_id into greatest created_at
+    const filesToStack = [
+      { id: "1", filename: "photo.jpg", folder_id: null, created_at: 100, size_bytes: 10, expires_in: -1 },
+      { id: "2", filename: "photo.jpg", folder_id: null, created_at: 300, size_bytes: 30, expires_in: -1 },
+      { id: "3", filename: "photo.jpg", folder_id: null, created_at: 200, size_bytes: 20, expires_in: -1 },
+      { id: "4", filename: "photo.jpg", folder_id: "folder-a", created_at: 400, size_bytes: 40, expires_in: -1 },
+      { id: "5", filename: "other.txt", folder_id: null, created_at: 500, size_bytes: 50, expires_in: -1 },
+    ] as unknown as PublicFileMetadata[];
+
+    const resStacked = filterSortPaginateFiles(filesToStack, { stack: true });
+    expect(resStacked.total_files).toBe(5);
+    expect(resStacked.total).toBe(3);
+    expect(resStacked.total_size_bytes).toBe(120); // 50 + 40 + 30
+    expect(resStacked.items.map((f) => f.id)).toEqual(["5", "4", "2"]); // sorted by date desc
+
+    const rootPhoto = resStacked.items.find((f) => f.id === "2");
+    expect(rootPhoto?.versions).toBeDefined();
+    expect(rootPhoto?.versions?.map((v) => v.id)).toEqual(["3", "1"]);
+
+    const folderPhoto = resStacked.items.find((f) => f.id === "4");
+    expect("versions" in (folderPhoto ?? {})).toBe(false);
+
+    const otherFile = resStacked.items.find((f) => f.id === "5");
+    expect("versions" in (otherFile ?? {})).toBe(false);
+
+    // Without stack, no versions and no total_files
+    const resUnstacked = filterSortPaginateFiles(filesToStack);
+    expect("total_files" in resUnstacked).toBe(false);
+    expect(resUnstacked.total).toBe(5);
+    for (const item of resUnstacked.items) {
+      expect("versions" in item).toBe(false);
+    }
+
+    // Stacking with filters (e.g. expiring filter applied before stacking)
+    const filesWithExpiryAndDuplicates = [
+      { id: "e1", filename: "log.txt", folder_id: null, created_at: 10, size_bytes: 10, expires_in: -1 }, // permanent
+      { id: "e2", filename: "log.txt", folder_id: null, created_at: 20, size_bytes: 20, expires_in: 50 }, // expiring
+    ] as unknown as PublicFileMetadata[];
+    const resExpiringStacked = filterSortPaginateFiles(filesWithExpiryAndDuplicates, { expiring: true, stack: true });
+    expect(resExpiringStacked.total_files).toBe(1); // e1 filtered out before stacking
+    expect(resExpiringStacked.total).toBe(1);
+    const onlyItem = resExpiringStacked.items[0]!;
+    expect(onlyItem.id).toBe("e2");
+    expect("versions" in onlyItem).toBe(false);
   });
 });
 

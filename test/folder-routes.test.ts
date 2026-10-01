@@ -34,8 +34,9 @@ describe("folder REST routes", () => {
       payload: JSON.stringify({ name: "campanha" }),
     });
     expect(res.statusCode).toBe(200);
-    const folder = res.json() as { id: string; name: string };
+    const folder = res.json() as { id: string; name: string; created_at: number; updated_at: number };
     expect(folder.name).toBe("campanha");
+    expect(folder.updated_at).toBe(folder.created_at);
 
     res = await app.inject({
       method: "POST",

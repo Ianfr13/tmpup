@@ -204,10 +204,12 @@ async function listMemberMetadata(folderId: string): Promise<FileMetadata[]> {
 async function folderToPublic(record: FolderMetadataData): Promise<PublicFolder> {
   const members = await listMemberMetadata(record.folder_id);
   const active = members.filter((m) => !m.isExpired);
+  const updatedAt = active.reduce((max, m) => Math.max(max, m.createdAt), 0) || record.created_at;
   return {
     id: record.folder_id,
     name: record.name,
     created_at: record.created_at,
+    updated_at: updatedAt,
     file_count: active.length,
     total_size_bytes: active.reduce((sum, m) => sum + (m.sizeBytes || 0), 0),
     download_url: `${config.baseUrl}/api/folders/${record.folder_id}/download`,

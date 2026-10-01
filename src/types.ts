@@ -27,6 +27,7 @@ export interface PublicFileMetadata {
   last_viewed_at: number | null;
   last_downloaded_at: number | null;
   folder_id: string | null;
+  versions?: PublicFileMetadata[];
 }
 
 /** Serialized folder sidecar shape (`<uuid>.folder.json`). */
@@ -41,6 +42,7 @@ export interface PublicFolder {
   id: string;
   name: string;
   created_at: number;
+  updated_at: number;
   file_count: number;
   total_size_bytes: number;
   download_url: string;
@@ -64,6 +66,7 @@ export interface FileListPage {
   total_pages: number;
   total_size_bytes: number;
   expiring_soon_count: number;
+  total_files?: number;
 }
 
 /** Result of a successful upload (REST multipart-ish raw body or MCP tool). */

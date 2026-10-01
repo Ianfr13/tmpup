@@ -14,6 +14,8 @@ export interface FilterSortPaginateOptions {
   page?: number | null;
   /** undefined = no folder filter; "root" = files without a folder; uuid = that folder. */
   folderId?: string | null;
+  expiring?: boolean | null;
+  stack?: boolean | null;
 }
 
 function compare(a: number | string, b: number | string): number {
@@ -55,6 +57,31 @@ export function filterSortPaginateFiles(
     }
   }
 
+  if (opts.expiring) {
+    items = items.filter((f) => (f.expires_in ?? -1) >= 0);
+  }
+
+  let totalFiles: number | undefined;
+  if (opts.stack) {
+    totalFiles = items.length;
+    const groups = new Map<string, PublicFileMetadata[]>();
+    for (const item of items) {
+      const key = `${item.folder_id ?? null}\0${item.filename ?? ""}`;
+      const group = groups.get(key);
+      if (group) {
+        group.push(item);
+      } else {
+        groups.set(key, [item]);
+      }
+    }
+    items = [...groups.values()].map((group) => {
+      group.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+      // Every group holds at least the item that created it.
+      const [newest, ...older] = group as [PublicFileMetadata, ...PublicFileMetadata[]];
+      return older.length > 0 ? { ...newest, versions: older } : newest;
+    });
+  }
+
   const sortKey = (opts.sort || "date").trim().toLowerCase();
   if (sortKey === "name") {
     items.sort((a, b) => compare((a.filename ?? "").toLowerCase(), (b.filename ?? "").toLowerCase()));
@@ -84,7 +111,7 @@ export function filterSortPaginateFiles(
   const page = Math.max(1, opts.page ?? 1);
   const start = (page - 1) * pageSize;
 
-  return {
+  const result: FileListPage = {
     items: items.slice(start, start + pageSize),
     total,
     page,
@@ -93,4 +120,10 @@ export function filterSortPaginateFiles(
     total_size_bytes: totalSizeBytes,
     expiring_soon_count: expiringSoonCount,
   };
+
+  if (opts.stack) {
+    result.total_files = totalFiles;
+  }
+
+  return result;
 }
