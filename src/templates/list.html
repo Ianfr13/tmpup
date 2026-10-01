@@ -54,7 +54,8 @@
   .list-header{position:sticky;top:0;background:#fff;border-bottom:1px solid #eceff3;padding:8px 12px;display:flex;align-items:center;gap:8px;font-size:11px;font-weight:600;color:#5c6470;text-transform:uppercase;z-index:2}
   .file-list-body{flex:1;padding:0}
   .load-more-btn{margin:12px auto;padding:8px 16px;border:1px solid #dfe3e8;border-radius:6px;background:#fff;font-size:13px;font-weight:600;color:#1a1d21;cursor:pointer;display:block}.load-more-btn:hover{background:#f1f4f9}
-  .bulk-bar{display:none;align-items:center;gap:10px;background:#1a1d21;border-radius:8px;padding:8px 12px;font-size:12px;color:#fff}.bulk-bar.active{display:flex}
+  .bulk-bar{display:none;align-items:center;gap:10px;background:#1a1d21;border-radius:8px;padding:8px 12px;font-size:12px;color:#fff;flex-wrap:wrap}.bulk-bar.active{display:flex}
+  .bulk-ctrls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .bulk-btn{background:#2a2e33;border:1px solid #454c57;border-radius:6px;padding:4px 10px;font-size:12px;color:#fff;cursor:pointer}.bulk-btn.danger{background:#7f1d1d;border-color:#b42318;color:#fecaca}
   .bulk-cancel{background:none;border:none;color:#93c5fd;font-size:12px;cursor:pointer;text-decoration:underline}
   .list-row{display:flex;align-items:center;gap:8px;height:38px;padding:0 12px;border-bottom:1px solid #eceff3;font-size:13px;color:#1a1d21}.list-row:hover{background:#f1f4f9}
@@ -121,7 +122,7 @@
       <input type="file" id="fileInput" multiple style="display:none">
       <div class="dropzone-lead">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1d4ed8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        <div><div style="font-weight:600">Solte arquivos aqui ou clique para enviar</div><div style="font-size:12px;color:#5c6470">Ctrl+V envia um print</div></div>
+        <div><button type="button" id="uploadBtn" style="background:none;border:none;padding:0;font-weight:600;color:inherit;cursor:pointer;text-align:left;display:block">Solte arquivos aqui ou clique para enviar</button><div style="font-size:12px;color:#5c6470">Ctrl+V envia um print</div></div>
       </div>
       <div class="dropzone-ctrls">
         <label for="destSelect">Guardar em</label><select id="destSelect"><option value="">Sem pasta</option></select>
@@ -148,11 +149,13 @@
     <div class="bulk-bar" id="bulkBar">
       <span id="bulkCount">0 selecionado(s)</span>
       <div class="spacer"></div>
-      <select class="bulk-select" id="bulkMoveSelect" aria-label="Mover para pasta"><option value="" disabled selected>Mover para pasta</option><option value="root">Sem pasta</option></select>
-      <button class="bulk-btn" id="bulkCopyBtn" type="button">Copiar links</button>
-      <button class="bulk-btn" id="bulkRenewBtn" type="button">Nunca expira</button>
-      <button class="bulk-btn danger" id="bulkDeleteBtn" type="button">Excluir</button>
-      <button class="bulk-cancel" id="bulkCancelBtn" type="button">Cancelar</button>
+      <div class="bulk-ctrls">
+        <select class="bulk-select" id="bulkMoveSelect" aria-label="Mover para pasta"><option value="" disabled selected>Mover para pasta</option><option value="root">Sem pasta</option></select>
+        <button class="bulk-btn" id="bulkCopyBtn" type="button">Copiar links</button>
+        <button class="bulk-btn" id="bulkRenewBtn" type="button">Nunca expira</button>
+        <button class="bulk-btn danger" id="bulkDeleteBtn" type="button">Excluir</button>
+        <button class="bulk-cancel" id="bulkCancelBtn" type="button">Cancelar</button>
+      </div>
     </div>
     <div class="list-card">
       <div class="list-header">
@@ -169,6 +172,7 @@
 (function(){
   const dropzone = document.getElementById('dropzone');
   const fileInput = document.getElementById('fileInput');
+  const uploadBtn = document.getElementById('uploadBtn');
   const destSelect = document.getElementById('destSelect');
   const ttlSelect = document.getElementById('ttlSelect');
   const progressWrap = document.getElementById('progressWrap');
@@ -227,7 +231,9 @@
         await navigator.clipboard.writeText(text);
         return true;
       }
-    } catch(err) {}
+    } catch(err) {
+      logError('copy_fallback', (err && err.name) || 'Error');
+    }
     let ta;
     try {
       ta = document.createElement('textarea');
@@ -254,7 +260,8 @@
     }
   }
 
-  dropzone.addEventListener('click', ev => { if(!ev.target.closest('select, label, option')) fileInput.click(); });
+  uploadBtn.addEventListener('click', ev => { ev.stopPropagation(); fileInput.click(); });
+  dropzone.addEventListener('click', ev => { if(!ev.target.closest('select, label, option, button')) fileInput.click(); });
   ['dragenter','dragover'].forEach(e => dropzone.addEventListener(e, ev => { ev.preventDefault(); dropzone.classList.add('dragover'); }));
   ['dragleave','drop'].forEach(e => dropzone.addEventListener(e, ev => { ev.preventDefault(); dropzone.classList.remove('dragover'); }));
   dropzone.addEventListener('drop', ev => { const files = Array.from(ev.dataTransfer.files); if(files.length) uploadFiles(files); });
@@ -382,7 +389,7 @@
   async function loadFiles(append) {
     const requestId = ++loadFilesRequestId;
     const targetPage = append ? currentPage + 1 : 1;
-    if(append) loadMoreBtn.disabled = true;
+    loadMoreBtn.disabled = true;
     try {
       let query = `stack=1&kind=${encodeURIComponent(currentKind)}&page=${targetPage}`;
       if(currentQuery) {
@@ -667,10 +674,12 @@
         } else {
           logError('move_file_failed', res.statusText, id);
           showToast('Erro ao mover');
+          render();
         }
       } catch(err) {
         logError('move_file_failed', err, id);
         showToast('Erro ao mover');
+        render();
       }
       return;
     }
