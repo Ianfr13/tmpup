@@ -85,9 +85,9 @@
   .more-panel{display:flex;align-items:center;gap:10px;padding:6px 12px;background:#f7f8fb;border-bottom:1px solid #eceff3;font-size:12px;color:#454c57;flex-wrap:wrap}
   .panel-select{border:1px solid #cfd5dc;border-radius:6px;padding:3px 6px;font-size:12px;background:#fff;color:#1a1d21}
   .bulk-select{border:1px solid #454c57;border-radius:6px;padding:4px 8px;font-size:12px;background:#2a2e33;color:#fff}
-  #locSelect{display:none}
+  #locSelect,.loc-bar{display:none}
   @media (max-width: 1000px){.cell-size,.cell-exp,.cell-views,.col-size,.col-exp,.col-views{display:none}}
-  @media (max-width: 760px){.sidebar,.summary-bar{display:none}#locSelect{display:block;width:100%;height:36px;border:1px solid #cfd5dc;border-radius:6px;padding:0 8px;font-size:13px;background:#fff;color:#1a1d21;margin-bottom:4px}}
+  @media (max-width: 760px){.sidebar,.summary-bar,.user-email{display:none}.wordmark{width:auto}.search-wrap,.search-input{min-width:120px;flex:1}.title-row,.chip-row{flex-wrap:wrap}.loc-bar{display:flex;gap:8px;align-items:center;margin-bottom:4px}#locSelect{display:block;flex:1;min-width:0;height:36px;border:1px solid #cfd5dc;border-radius:6px;padding:0 8px;font-size:13px;background:#fff;color:#1a1d21}#btnNewFolderMobile{height:36px;white-space:nowrap;padding:0 10px}}
   .btn-copy-link{background:#1d4ed8;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}.btn-copy-link:hover{background:#1e40af}.btn-copy-link.copied{background:#15803d}
   .renew-chip{background:#fff;border:1px solid #cfd5dc;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer}.renew-chip:hover{background:#e3e8ff;border-color:#1d4ed8}
   .btn-sub-action{background:#fff;border:1px solid #dfe3e8;border-radius:6px;padding:4px 8px;font-size:12px;color:#1a1d21;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;white-space:nowrap}.btn-sub-action:hover{background:#f1f4f9}
@@ -131,7 +131,7 @@
     <div class="progress-wrap" id="progressWrap"><div class="progress-bar" id="progressBar"></div></div>
     <div class="progress-text" id="progressText" style="display:none"></div>
     <div class="status" id="status"></div>
-    <select id="locSelect" aria-label="Navegação"><option value="all">Tudo</option><option value="root">Sem pasta</option><option value="expiring">Com validade</option></select>
+    <div class="loc-bar"><select id="locSelect" aria-label="Navegação"><option value="all">Tudo</option><option value="root">Sem pasta</option><option value="expiring">Com validade</option></select><button class="btn-sub" id="btnNewFolderMobile" type="button">Nova pasta</button></div>
     <div class="title-row">
       <div class="breadcrumb" id="breadcrumb"></div><h1 class="title-h1" id="viewTitle">Tudo</h1><span class="title-count" id="titleCount">0 arquivos</span>
       <div class="folder-actions"><button class="btn-sub" id="btnDownloadFolder" type="button" hidden>Baixar .zip</button><button class="btn-sub danger" id="btnDeleteFolder" type="button" hidden>Excluir pasta</button></div>
@@ -188,6 +188,7 @@
   const viewTitle = document.getElementById('viewTitle');
   const titleCount = document.getElementById('titleCount');
   const btnNewFolder = document.getElementById('btnNewFolder');
+  const btnNewFolderMobile = document.getElementById('btnNewFolderMobile');
   const btnDownloadFolder = document.getElementById('btnDownloadFolder');
   const btnDeleteFolder = document.getElementById('btnDeleteFolder');
   const sidebar = document.getElementById('sidebar');
@@ -226,17 +227,20 @@
         return true;
       }
     } catch(err) {}
+    let ta;
     try {
-      const ta = document.createElement('textarea');
+      ta = document.createElement('textarea');
       ta.value = text;
       document.body.appendChild(ta);
       ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
+      const ok = document.execCommand('copy');
+      if(!ok) throw new Error('execCommand copy failed');
       return true;
     } catch(e) {
       logError('copy_failed', e);
       return false;
+    } finally {
+      if(ta && ta.parentNode) ta.parentNode.removeChild(ta);
     }
   }
   async function copyLink(url, btn) {
@@ -244,6 +248,8 @@
       btn.classList.add('copied');
       showToast('Link copiado!');
       setTimeout(() => btn.classList.remove('copied'), 2000);
+    } else {
+      showToast('Não foi possível copiar');
     }
   }
 
@@ -419,7 +425,17 @@
       if(!res.ok) { logError('load_folders_failed', res.statusText); return; }
       const data = await res.json();
       if(requestId !== loadFoldersRequestId) return;
-      displayedFolders = Array.isArray(data.items) ? data.items : [];
+      const allItems = Array.isArray(data.items) ? [...data.items] : [];
+      const totalPages = Number(data.total_pages) || 1;
+      for(let p = 2; p <= totalPages; p++) {
+        const pageRes = await fetch(`/api/folders?page=${p}`);
+        if(requestId !== loadFoldersRequestId) return;
+        if(!pageRes.ok) { logError('load_folders_failed', pageRes.statusText); return; }
+        const pageData = await pageRes.json();
+        if(requestId !== loadFoldersRequestId) return;
+        if(Array.isArray(pageData.items)) allItems.push(...pageData.items);
+      }
+      displayedFolders = allItems;
       displayedFolders.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
       renderFolderWidgets(data.root);
     } catch(e) {
@@ -695,7 +711,7 @@
 
   folderSearch.addEventListener('input', renderFolders);
 
-  btnNewFolder.addEventListener('click', async () => {
+  async function createFolder() {
     const name = window.prompt('Nome da pasta');
     if(!name || !name.trim()) return;
     try {
@@ -717,7 +733,9 @@
       logError('create_folder_failed', e);
       showToast('Erro ao criar pasta');
     }
-  });
+  }
+  btnNewFolder.addEventListener('click', createFolder);
+  if(btnNewFolderMobile) btnNewFolderMobile.addEventListener('click', createFolder);
 
   btnDownloadFolder.addEventListener('click', () => {
     if(!isFolder(loc) || searchInput.value || currentQuery) return;
@@ -827,7 +845,7 @@
     const text = urls.join('\n');
     if(!text) return;
     if(await copyText(text)) showToast('Links copiados');
-    else showToast('Erro ao copiar links');
+    else showToast('Não foi possível copiar');
   });
   document.getElementById('bulkDeleteBtn').addEventListener('click', async () => {
     const ids = Array.from(selectedIds);

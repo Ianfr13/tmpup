@@ -230,4 +230,11 @@ describe("frontend template contracts (painel de trabalho)", () => {
     expect(HTML_TEMPLATE).toContain("visibleIds");
     expect(HTML_TEMPLATE).toContain("openVersions.clear()");
   });
+
+  it("pins mobile folder creation, copy failure toast, responsive header/chips and folder pagination", () => {
+    expect(HTML_TEMPLATE).toContain('id="btnNewFolderMobile"');
+    expect(HTML_TEMPLATE).toContain("Não foi possível copiar");
+    expect(HTML_TEMPLATE).toContain("total_pages");
+    expect(HTML_TEMPLATE).toContain("/api/folders?page=");
+  });
 });
